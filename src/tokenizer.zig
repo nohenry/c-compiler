@@ -41,6 +41,8 @@ pub const TokenKind = enum(u32) {
     double_pipe,
     exclamation,
     tilde,
+    ellipsis,
+    colon,
 
     assignment,
     plus_eq,
@@ -59,15 +61,33 @@ pub const TokenKind = enum(u32) {
 
     auto,
     atomic,
+    @"break",
     @"const",
+    case,
+    @"continue",
+    default,
+    do,
+    @"else",
+    @"enum",
     @"extern",
+    @"for",
+    goto,
+    @"if",
+    @"inline",
+    noreturn,
     register,
     restrict,
+    @"return",
     static,
+    static_assert,
+    @"struct",
+    @"switch",
     thread_local,
     typedef,
+    @"union",
     void,
     @"volatile",
+    @"while",
 
     unsigned,
     signed,
@@ -113,6 +133,7 @@ pub const TokenKind = enum(u32) {
             .double_pipe => "||",
             .exclamation => "!",
             .tilde => "~",
+            .colon => ":",
 
             .assignment => "=",
             .plus_eq => "+=",
@@ -131,15 +152,33 @@ pub const TokenKind = enum(u32) {
 
             .auto => "auto",
             .atomic => "atomic",
+            .@"break" => "break",
             .@"const" => "const",
+            .case => "case",
+            .@"continue" => "continue",
+            .default => "default",
+            .do => "do",
+            .@"else" => "else",
+            .@"enum" => "enum",
             .@"extern" => "extern",
+            .@"for" => "for",
+            .goto => "goto",
+            .@"if" => "if",
+            .@"inline" => "inline",
+            .noreturn => "noreturn",
             .register => "register",
             .restrict => "restrict",
+            .@"return" => "return",
             .static => "static",
+            .static_assert => "static_assert",
+            .@"struct" => "struct",
+            .@"switch" => "switch",
             .thread_local => "thread_local",
             .typedef => "typedef",
+            .@"union" => "union",
             .void => "void",
             .@"volatile" => "volatile",
+            .@"while" => "while",
 
             else => @panic(""),
         };
@@ -149,15 +188,33 @@ pub const TokenKind = enum(u32) {
 pub const keyword_map = std.StaticStringMap(TokenKind).initComptime(&.{
     .{ "auto", .auto },
     .{ "atomic", .atomic },
+    .{ "break", .@"break" },
     .{ "const", .@"const" },
+    .{ "case", .case },
+    .{ "continue", .@"continue" },
+    .{ "default", .default },
+    .{ "do", .do },
+    .{ "else", .@"else" },
+    .{ "enum", .@"enum" },
     .{ "extern", .@"extern" },
+    .{ "for", .@"for" },
+    .{ "goto", .goto },
+    .{ "if", .@"if" },
+    .{ "inline", .@"inline" },
+    .{ "noreturn", .noreturn },
     .{ "register", .register },
     .{ "restrict", .restrict },
+    .{ "return", .@"return" },
     .{ "static", .static },
+    .{ "static_assert", .static_assert },
+    .{ "struct", .@"struct" },
+    .{ "switch", .@"switch" },
     .{ "thread_local", .thread_local },
     .{ "typedef", .typedef },
+    .{ "union", .@"union" },
     .{ "void", .void },
     .{ "volatile", .@"volatile" },
+    .{ "while", .@"while" },
 
     .{ "unsigned", .unsigned },
     .{ "signed", .signed },
@@ -419,7 +476,15 @@ pub const Tokenizer = struct {
                 '}' => break :blk self.advanceToken(TokenKind.close_brace),
                 ',' => break :blk self.advanceToken(TokenKind.comma),
                 ';' => break :blk self.advanceToken(TokenKind.semicolon),
-                '.' => break :blk self.advanceToken(TokenKind.dot),
+                ':' => break :blk self.advanceToken(TokenKind.colon),
+                '.' => {
+                    if (self.pos + 2 < self.unit.source.len) {
+                        if (self.unit.source[self.pos + 1] == '.' and self.unit.source[self.pos + 2] == '.') {
+                            break :blk self.advanceToken(TokenKind.ellipsis);
+                        }
+                    }
+                    break :blk self.advanceToken(TokenKind.dot);
+                },
                 '=' => {
                     if (self.pos + 1 < self.unit.source.len) {
                         switch (self.unit.source[self.pos + 1]) {
@@ -580,6 +645,7 @@ pub const Tokenizer = struct {
             .exclamation,
             .tilde,
             .dot,
+            .colon,
             => self.pos += 1,
 
             .plusplus,
@@ -603,7 +669,8 @@ pub const Tokenizer = struct {
 
             .left_shift_eq,
             .right_shift_eq,
-            => self.pos += 2,
+            .ellipsis,
+            => self.pos += 3,
 
             else => @panic("Cannot detmerine for this type of token"),
         }

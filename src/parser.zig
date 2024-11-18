@@ -7,6 +7,7 @@ const Tokenizer = tok.Tokenizer;
 pub const ParseError = error{ OutOfTokens, UnexpectedToken };
 
 pub const NodeKind = enum(u32) {
+    empty,
     int_literal,
     float_literal,
     string_literal,
@@ -35,15 +36,20 @@ pub const NodeKind = enum(u32) {
     /// node_data: a(u32) = index of identifier, b(u16) = relative index of type
     var_declaration,
 
-    /// node_data: a(u32) = index of identifier, b(u16) = relative index of type, c(u16) = relative index of init
+    /// node_data: a(u32) = index of identifier, c(u16) = relative index of type, d(u16) = relative index of init
     var_declaration_init,
+
+    /// node_data: a(u32) = index of identifier, c(u16) = relative index of type
+    function_declaration,
+    /// node_data: a(u32) = index of identifier, c(u16) = relative index of type, d(u16) = relative index of body
+    function_declaration_body,
 
     /// node_data: a(u32) = index of element type, b(u16) = relative start of type_qualifier, c(u16) = count of type qualifiers
     /// node_data: a(u32) = index of base type, b(u32) = start of type_qualifier
     pointer,
 
     /// For all types:
-    /// node_data: a(u8) = TypeQualifier.Type
+    /// node_data: h(u8) = TypeQualifier.Type
     char_type,
     signed_char_type,
     unsigned_char_type,
@@ -70,10 +76,152 @@ pub const NodeKind = enum(u32) {
     complex_type,
     imaginary_type,
 
-    /// node_data: a(u32) = token index of type name identifier
+    /// []
+    /// node_data: a(u32) = base type index, h(u8) = type_qualifiers
+    array_type,
+    /// [*]
+    /// node_data: a(u32) = base type index, h(u8) = type_qualifiers
+    array_type_variable,
+    /// [10]
+    /// node_data: a(u32) = base type index, b(u16) = relative index of size, h(u8) = type_qualifiers
+    array_type_fixed,
+    /// [static 10]
+    /// node_data: a(u32) = base type index, b(u16) = relative index of size, h(u8) = type_qualifiers    array_type_static,
+    array_type_static,
+
+    /// node_data: a(u16) = relative index of return type
+    function_type,
+    /// node_data: a(u16) = relative index of return type,
+    ///            b(u16) = relative index of parameter type
+    function_type_one_parameter,
+    /// node_data: a(u16) = relative index of return type,
+    ///            b(u16) = relative index of parameter type start,
+    ///            g(u8)  = parameter type count
+    function_type_parameter,
+
+    /// node_data: a(u16) = relative index of type, c(u8) = storage class
+    parameter,
+    /// node_data: a(u16) = relative index of type, c(u8) = storage class, b(u32) = index of identifier
+    parameter_ident,
+    /// ...
+    parameter_ellipsis,
+
+    /// struct name;
+    /// node_data: a(u32) = identifier
+    struct_forward,
+    /// struct { int a; }
+    /// node_data: a(u32) = member range start, b(u32) = member range count
+    @"struct",
+    /// struct foobar { int a; }
+    /// node_data: a(u32) = identifier
+    /// members are specified by "range" node immediately before this node
+    struct_ident,
+    /// struct name;
+    /// node_data: a(u32) = identifier
+    union_forward,
+    /// node_data: a(u32) = member range start, b(u32) = member range count
+    @"union",
+    /// node_data: a(u32) = identifier
+    union_ident,
+    /// node_data: c(u16) = relative index of type
+    member,
+    /// node_data: a(u32) = identifier index, c(u16) = relative index of type
+    member_ident,
+    /// node_data: c(u16) = relative index of type, d(u16) = relative index of bitfield
+    member_bitfield,
+    /// node_data: a(u32) = identifier index, c(u16) = relative index of type, d(u16) = relative index of bitfield
+    member_ident_bitfield,
+    /// node_data: a(u32) = identifier index
+    enum_member,
+    /// node_data: a(u32) = identifier index, b(u32) = value index
+    enum_member_value,
+
+    /// node_data: a(u32) member range start, b(u32) member range count
+    @"enum",
+    /// node_data: a(u32) = identifier
+    /// members are specified by "range" node immediately before this node
+    enum_ident,
+    /// node_data: a(u32) = identifier
+    enum_forward,
+    /// node_Data: a(u32) = identifier, h(u8) = type qualifiers
+    atomic_type,
+
+    /// node_data: a(u32) = index expression index, b(u32) = last designator index
+    designator_index,
+    /// node_data: a(u32) = identifier index, b(u32) = last designator index
+    designator_field,
+    /// node_data: a(u32) = index expression index
+    designator_index_terminal,
+    /// node_data: a(u32) = identifier index
+    designator_field_terminal,
+    /// node_data: a(u32) = index of designator, b(u32) = index of initializer
+    designation,
+    /// node_data:
+    initializer_list,
+    /// node_data: a(u32) = index of designation
+    initializer_list_one,
+    /// node_data: a(u32) = start range index, b(u32) = range count
+    initializer_list_many,
+
+    /// node_data: a(u32) = token index of type name identifier, h(u8) = type qualifiers
     type_name,
     /// node_data: a(u32) = token index of identifier
     identifier,
+    /// node_data: a(u32) = index of test expression
+    static_assert,
+    /// node_data: a(u32) = index of test expression, b(u32) = index of string
+    static_assert_str,
+
+    /// node_data:
+    compound_empty,
+    /// node_data: a(u32) = index of item
+    compound_one,
+    /// node_data: a(u32) = start range, b(u32) = count
+    compound,
+    /// node_data: a(u32) = index of condition, b(u32) = index of body
+    while_loop,
+    /// node_data: a(u32) = index of condition
+    while_loop_empty,
+    /// node_data: a(u32) = index of condition, b(u32) = index of body
+    do_while_loop,
+    /// node_data: a(u32) = index of condition
+    do_while_loop_empty,
+    /// node_data: a(u16) = relative index of init, b(u16) = relative index of condition, c(u16) = relative index of increment, d(u16) = relative index of body
+    for_loop,
+    /// node_data: a(u16) = relative index of init, b(u16) = relative index of condition, d(u16) = relative index of body
+    for_loop_inc,
+    /// node_data: a(u16) = relative index of init, b(u16) = relative index of condition, c(u16) = relative index of increment
+    for_loop_empty,
+    /// node_data: a(u16) = relative index of init, b(u16) = relative index of condition, d(u16) = relative index of body
+    for_loop_empty_inc,
+    /// node_data: a(u32) = index of condition, b(u32) = index of body
+    switch_case,
+    /// node_data: a(u32) = index of expression, b(u32) = index of body
+    case,
+    /// node_data: a(u32) = index of body
+    default,
+    /// node_data: a(u32) = index of label, b(u32) = index of statement
+    label,
+    /// node_data: a(u32) = index of label identifier
+    goto,
+    /// node_data:
+    continue_statement,
+    /// node_data:
+    break_statement,
+    /// node_data:
+    return_statement,
+    /// node_data: a(u32) = index of expression
+    return_statement_value,
+
+    /// node_data: a(u32) = index of condition, b(u32) = index of body
+    if_statement,
+    /// node_data: a(u32) = index of condition
+    if_statement_no_body,
+    /// node_data: a(u32) = index of condition, c(u16) = relative index of body, d(u16) = relative index of else body
+    if_statement_else,
+    /// node_data: a(u32) = index of condition, b(u32) = index of else body
+    if_statement_no_body_else,
+    empty_statement,
 
     /// Represents Node Range
     /// node_data: a = start, b = end
@@ -83,17 +231,17 @@ pub const NodeKind = enum(u32) {
 pub const NodeData = extern union {
     long: u64,
     // range: NodeRange,
-    two: extern struct {
+    two: packed struct {
         a: u32,
         b: u32,
     },
-    four: extern struct {
+    four: packed struct {
         a: u16,
         b: u16,
         c: u16,
         d: u16,
     },
-    eight: extern struct {
+    eight: packed struct {
         a: u8,
         b: u8,
         c: u8,
@@ -104,7 +252,7 @@ pub const NodeData = extern union {
         h: u8,
     },
     double: f64,
-    float: extern struct {
+    float: packed struct {
         a: f32,
         b: f32,
     },
@@ -115,7 +263,7 @@ pub const NodeData = extern union {
 };
 
 comptime {
-    std.debug.assert(@sizeOf(NodeData) == 8);
+    std.debug.assert(@sizeOf(Node) == 16);
 }
 
 pub const StorageClass = struct {
@@ -126,25 +274,33 @@ pub const StorageClass = struct {
     pub const thread_local: Type = (1 << 3);
     pub const auto: Type = (1 << 4);
     pub const register: Type = (1 << 5);
+    pub const @"inline": Type = (1 << 6);
+    pub const @"noreturn": Type = (1 << 7);
 
     pub fn write(storage_class: Type, writer: anytype) !void {
         if ((storage_class & typedef) > 0) {
-            _ = try writer.write("TYPEDEF");
+            _ = try writer.write("TYPEDEF ");
         }
         if ((storage_class & @"extern") > 0) {
-            _ = try writer.write("EXTERN");
+            _ = try writer.write("EXTERN ");
         }
         if ((storage_class & static) > 0) {
-            _ = try writer.write("STATIC");
+            _ = try writer.write("STATIC ");
         }
         if ((storage_class & thread_local) > 0) {
-            _ = try writer.write("THREAD_LOCAL");
+            _ = try writer.write("THREAD_LOCAL ");
         }
         if ((storage_class & auto) > 0) {
-            _ = try writer.write("auto");
+            _ = try writer.write("AUTO ");
         }
         if ((storage_class & register) > 0) {
-            _ = try writer.write("register");
+            _ = try writer.write("REGISTER ");
+        }
+        if ((storage_class & @"inline") > 0) {
+            _ = try writer.write("INLINE ");
+        }
+        if ((storage_class & @"noreturn") > 0) {
+            _ = try writer.write("NORETURN ");
         }
     }
 };
@@ -158,22 +314,22 @@ pub const TypeQualifier = struct {
 
     pub fn write(type_qualifier: Type, writer: anytype) !void {
         if ((type_qualifier & @"const") > 0) {
-            _ = try writer.write("CONST");
+            _ = try writer.write("CONST ");
         }
         if ((type_qualifier & restrict) > 0) {
-            _ = try writer.write("RESTRICT");
+            _ = try writer.write("RESTRICT ");
         }
         if ((type_qualifier & @"volatile") > 0) {
-            _ = try writer.write("VOLATILE");
+            _ = try writer.write("VOLATILE ");
         }
         if ((type_qualifier & atomic) > 0) {
-            _ = try writer.write("ATOMIC");
+            _ = try writer.write("ATOMIC ");
         }
     }
 };
 
 pub const NodeIndex = u32;
-pub const Node = struct {
+pub const Node = extern struct {
     kind: NodeKind,
     data: NodeData,
 
@@ -261,6 +417,28 @@ pub const Node = struct {
                     init_index,
                 });
             },
+            .function_declaration_body => {
+                const ident_index = self.data.as(.two).a;
+                const type_index = absoluteIndex(index, self.data.as(.four).c);
+                const body_index = absoluteIndex(index, self.data.as(.four).d);
+
+                try writer.print("\x1b[1;35mFunctionDeclaration\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+
+                result = NodeRangeOrNode.initNodes(&.{
+                    type_index,
+                    body_index,
+                });
+            },
+            .function_declaration => {
+                const ident_index = self.data.as(.two).a;
+                const type_index = absoluteIndex(index, self.data.as(.four).c);
+
+                try writer.print("\x1b[1;35mFunctionDeclaration\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+
+                result = .{
+                    .node = type_index,
+                };
+            },
             .pointer => {
                 const base_type = self.data.as(.two).a;
                 const type_qualifier = self.data.as(.two).b;
@@ -298,15 +476,221 @@ pub const Node = struct {
             .complex_type,
             .imaginary_type,
             => {
-                const qualifier = self.data.as(.eight).a;
+                const qualifier = self.data.as(.eight).h;
                 try writer.print("\x1b[1;35mType\x1b[0m ", .{});
                 try TypeQualifier.write(qualifier, writer);
                 try writer.print("\x1b[32m{s}\x1b[0m", .{typeToStr(self.kind)});
             },
+            .array_type => {
+                @setEvalBranchQuota(100000);
+                const base_index = self.data.as(.two).a;
+                const qualifier = self.data.as(.eight).h;
+
+                try writer.print("\x1b[1;35mArrayType\x1b[0m [", .{});
+                try TypeQualifier.write(qualifier, writer);
+                try writer.print("]", .{});
+                result = .{ .node = base_index };
+            },
+            .array_type_variable => {
+                @setEvalBranchQuota(100000);
+                const base_index = self.data.as(.two).a;
+                const qualifier = self.data.as(.eight).h;
+
+                try writer.print("\x1b[1;35mArrayType\x1b[0m [", .{});
+                try TypeQualifier.write(qualifier, writer);
+                try writer.print("*]", .{});
+                result = .{ .node = base_index };
+            },
+            .array_type_static => {
+                @setEvalBranchQuota(100000);
+                const base_index = self.data.as(.two).a;
+                const size_index = self.data.as(.four).c;
+                const qualifier = self.data.as(.eight).h;
+
+                try writer.print("\x1b[1;35mArrayType\x1b[0m [", .{});
+                try TypeQualifier.write(qualifier, writer);
+                try writer.print("static <child_value>]", .{});
+
+                result = NodeRangeOrNode.initNodes(&.{
+                    absoluteIndex(index, size_index),
+                    base_index,
+                });
+            },
+            .array_type_fixed => {
+                @setEvalBranchQuota(100000);
+                const base_index = self.data.as(.two).a;
+                const size_index = self.data.as(.four).c;
+                const qualifier = self.data.as(.eight).h;
+
+                try writer.print("\x1b[1;35mArrayType\x1b[0m [", .{});
+                try TypeQualifier.write(qualifier, writer);
+                try writer.print("<child_value>] {}", .{size_index});
+
+                result = NodeRangeOrNode.initNodes(&.{
+                    absoluteIndex(index, size_index),
+                    base_index,
+                });
+            },
+            .function_type => {
+                const return_type_index = absoluteIndex(index, self.data.as(.four).a);
+                try writer.print("\x1b[1;35mFunctionType\x1b[0m", .{});
+
+                result = .{
+                    .node = return_type_index,
+                };
+            },
+            .function_type_one_parameter => {
+                const return_type_index = absoluteIndex(index, self.data.as(.four).a);
+                const parameter_index = absoluteIndex(index, self.data.as(.four).b);
+                try writer.print("\x1b[1;35mFunctionType\x1b[0m", .{});
+
+                result = NodeRangeOrNode.initNodes(&.{ return_type_index, parameter_index });
+            },
+            .function_type_parameter => {
+                const return_type_index = absoluteIndex(index, self.data.as(.four).a);
+                const parameter_start_index = absoluteIndex(index, self.data.as(.four).b);
+                const parameter_count = self.data.as(.eight).g;
+                try writer.print("\x1b[1;35mFunctionType\x1b[0m", .{});
+
+                result = NodeRangeOrNode.initNodeAndRange(return_type_index, parameter_start_index, parameter_count);
+            },
+            .@"struct" => {
+                try writer.print("\x1b[1;35mStruct\x1b[0m", .{});
+                const member_range_start = self.data.as(.two).a;
+                const member_range_count = self.data.as(.two).b;
+
+                result = .{
+                    .node_range = .{
+                        .start = member_range_start,
+                        .count = member_range_count,
+                    },
+                };
+            },
+            .struct_forward => {
+                const ident_index = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mStruct\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+            },
+            .struct_ident => {
+                const ident_index = self.data.as(.two).a;
+                const member_range_index = absoluteIndex(index, 1);
+                const member_range = unit.nodes.items[member_range_index];
+                try writer.print("\x1b[1;35mStruct\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+                std.debug.assert(member_range.kind == .range);
+
+                result = .{
+                    .node_range = .{
+                        .start = member_range.data.two.a,
+                        .count = member_range.data.two.b,
+                    },
+                };
+            },
+            .member => {
+                const type_index = absoluteIndex(index, self.data.as(.four).c);
+                try writer.print("\x1b[1;35mMember\x1b[0m", .{});
+
+                result = .{
+                    .node = type_index,
+                };
+            },
+            .member_ident => {
+                const ident_index = self.data.as(.two).a;
+                const type_index = absoluteIndex(index, self.data.as(.four).c);
+                try writer.print("\x1b[1;35mMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+
+                result = .{
+                    .node = type_index,
+                };
+            },
+            .member_bitfield => {
+                const type_index = absoluteIndex(index, self.data.as(.four).c);
+                const bitfield_index = absoluteIndex(index, self.data.as(.four).d);
+                try writer.print("\x1b[1;35mMember\x1b[0m", .{});
+
+                result = NodeRangeOrNode.initNodes(&.{ type_index, bitfield_index });
+            },
+            .member_ident_bitfield => {
+                const ident_index = self.data.as(.two).a;
+                const type_index = absoluteIndex(index, self.data.as(.four).c);
+                const bitfield_index = absoluteIndex(index, self.data.as(.four).d);
+                try writer.print("\x1b[1;35mMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+
+                result = NodeRangeOrNode.initNodes(&.{ type_index, bitfield_index });
+            },
+            .@"enum" => {
+                try writer.print("\x1b[1;35mEnum\x1b[0m", .{});
+                const member_range_start = self.data.as(.two).a;
+                const member_range_count = self.data.as(.two).b;
+
+                result = .{
+                    .node_range = .{
+                        .start = member_range_start,
+                        .count = member_range_count,
+                    },
+                };
+            },
+            .enum_ident => {
+                const ident_index = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mEnum\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+
+                const member_range_index = absoluteIndex(index, 1);
+                const member_range = unit.nodes.items[member_range_index];
+                std.debug.assert(member_range.kind == .range);
+
+                result = .{
+                    .node_range = .{
+                        .start = member_range.data.two.a,
+                        .count = member_range.data.two.b,
+                    },
+                };
+            },
+            .enum_forward => {
+                const ident_index = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mEnum\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+            },
+            .enum_member => {
+                const ident_index = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+            },
+            .enum_member_value => {
+                const ident_index = self.data.as(.two).a;
+                const value_index = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+
+                result = .{ .node = value_index };
+            },
+            .parameter => {
+                const type_index = absoluteIndex(index, self.data.as(.four).a);
+                const storage_class = self.data.as(.eight).c;
+                try writer.print("\x1b[1;35mParameter \x1b[0m", .{});
+                try StorageClass.write(storage_class, writer);
+
+                result = .{ .node = type_index };
+            },
+            .parameter_ident => {
+                const type_index = absoluteIndex(index, self.data.as(.four).a);
+                const ident_index = self.data.as(.two).b;
+                const storage_class = self.data.as(.eight).c;
+                try writer.print("\x1b[1;35mParameter\x1b[0m \x1b[1;36m'{s}'\x1b[0m ", .{unit.identifierAt(ident_index)});
+                try StorageClass.write(storage_class, writer);
+
+                result = .{ .node = type_index };
+            },
+            .parameter_ellipsis => {
+                try writer.print("\x1b[1;35mParameterEllipsis\x1b[0m ", .{});
+            },
             .type_name => {
                 const ident_index = self.data.as(.two).a;
+                const qualifier = self.data.as(.eight).h;
 
-                try writer.print("\x1b[1;35mType\x1b[0m \x1b[32m{s}\x1b[0m", .{unit.identifierAt(ident_index)});
+                try writer.print("\x1b[1;35mType\x1b[0m \x1b[32m{s}\x1b[0m ", .{unit.identifierAt(ident_index)});
+                try TypeQualifier.write(qualifier, writer);
+            },
+            .atomic_type => {
+                const ident_index = self.data.as(.two).a;
+                const qualifier = self.data.as(.eight).h;
+
+                try writer.print("\x1b[1;35mAtomic\x1b[0m \x1b[32m{s}\x1b[0m ", .{unit.identifierAt(ident_index)});
+                try TypeQualifier.write(qualifier, writer);
             },
             .identifier => {
                 const ident_index = self.data.as(.two).a;
@@ -378,6 +762,207 @@ pub const Node = struct {
                 try writer.print("\x1b[1;35mIndex\x1b[0m", .{});
 
                 result = NodeRangeOrNode.initNodes(&.{ expr, index_expr });
+            },
+            .designator_index_terminal => {
+                const index_expr = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mDesignatorIndex\x1b[0m", .{});
+
+                result = .{ .node = index_expr };
+            },
+            .designator_field_terminal => {
+                const ident_index = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mDesignatorField\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+            },
+            .designator_index => {
+                const index_expr = self.data.as(.two).a;
+                const prev = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mDesignatorIndex\x1b[0m", .{});
+
+                result = NodeRangeOrNode.initNodes(&.{ prev, index_expr });
+            },
+            .designator_field => {
+                const ident_index = self.data.as(.two).a;
+                const prev = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mDesignatorField\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+                result = .{ .node = prev };
+            },
+            .designation => {
+                const designator_index = self.data.as(.two).a;
+                const initializer = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mDesignation\x1b[0m", .{});
+
+                result = NodeRangeOrNode.initNodes(&.{ designator_index, initializer });
+            },
+            .initializer_list => {
+                try writer.print("\x1b[1;35mInitializerList\x1b[0m", .{});
+            },
+            .initializer_list_one => {
+                const designator_index = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mInitializerList\x1b[0m", .{});
+
+                result = .{ .node = designator_index };
+            },
+            .initializer_list_many => {
+                const start = self.data.as(.two).a;
+                const count = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mInitializerList\x1b[0m", .{});
+
+                result = .{
+                    .node_range = .{
+                        .start = start,
+                        .count = count,
+                    },
+                };
+            },
+            .static_assert => {
+                const expr = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mStaticAssert\x1b[0m", .{});
+                result = .{ .node = expr };
+            },
+            .static_assert_str => {
+                const test_expr = self.data.as(.two).a;
+                const expr = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mStaticAssert\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ test_expr, expr });
+            },
+            .compound_empty => {
+                try writer.print("\x1b[1;35mCompound\x1b[0m", .{});
+            },
+            .compound_one => {
+                const stmt_index = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mCompound\x1b[0m", .{});
+
+                result = .{ .node = stmt_index };
+            },
+            .compound => {
+                const start = self.data.as(.two).a;
+                const count = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mCompound\x1b[0m", .{});
+
+                result = .{
+                    .node_range = .{ .start = start, .count = count },
+                };
+            },
+            .while_loop => {
+                const condition = self.data.as(.two).a;
+                const body = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mWhile\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ condition, body });
+            },
+            .while_loop_empty => {
+                const condition = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mWhile\x1b[0m", .{});
+                result = .{ .node = condition };
+            },
+            .do_while_loop => {
+                const condition = self.data.as(.two).a;
+                const body = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mDoWhile\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ condition, body });
+            },
+            .do_while_loop_empty => {
+                const condition = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mDoWhile\x1b[0m", .{});
+                result = .{ .node = condition };
+            },
+            .for_loop => {
+                const init = absoluteIndex(index, self.data.as(.four).a);
+                const condition = absoluteIndex(index, self.data.as(.four).b);
+                const body = absoluteIndex(index, self.data.as(.four).d);
+                try writer.print("\x1b[1;35mFor\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ init, condition, body });
+            },
+            .for_loop_inc => {
+                const init = absoluteIndex(index, self.data.as(.four).a);
+                const condition = absoluteIndex(index, self.data.as(.four).b);
+                const increment = absoluteIndex(index, self.data.as(.four).c);
+                const body = absoluteIndex(index, self.data.as(.four).d);
+                try writer.print("\x1b[1;35mFor\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ init, condition, increment, body });
+            },
+            .for_loop_empty => {
+                const init = absoluteIndex(index, self.data.as(.four).a);
+                const condition = absoluteIndex(index, self.data.as(.four).b);
+                try writer.print("\x1b[1;35mFor\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{
+                    init,
+                    condition,
+                });
+            },
+            .for_loop_empty_inc => {
+                const init = absoluteIndex(index, self.data.as(.four).a);
+                const condition = absoluteIndex(index, self.data.as(.four).b);
+                const increment = absoluteIndex(index, self.data.as(.four).c);
+                try writer.print("\x1b[1;35mFor\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ init, condition, increment });
+            },
+            .switch_case => {
+                const value = self.data.as(.two).a;
+                const body = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mSwitch\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ value, body });
+            },
+            .case => {
+                const expr = self.data.as(.two).a;
+                const statement = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mCase\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ expr, statement });
+            },
+            .default => {
+                const statement = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mDefault\x1b[0m", .{});
+                result = .{ .node = statement };
+            },
+            .label => {
+                const ident = self.data.as(.two).a;
+                const statement = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mLabel\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident)});
+                result = .{ .node = statement };
+            },
+            .goto => {
+                const ident = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mLabel\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident)});
+            },
+            .continue_statement => {
+                try writer.print("\x1b[1;35mContinue\x1b[0m", .{});
+            },
+            .break_statement => {
+                try writer.print("\x1b[1;35mBreak\x1b[0m", .{});
+            },
+            .return_statement => {
+                try writer.print("\x1b[1;35mReturn\x1b[0m", .{});
+            },
+            .return_statement_value => {
+                const expr = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mReturn\x1b[0m", .{});
+                result = .{ .node = expr };
+            },
+            .if_statement => {
+                const condition = self.data.as(.two).a;
+                const body = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mIf\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ condition, body });
+            },
+            .if_statement_no_body => {
+                const condition = self.data.as(.two).a;
+                try writer.print("\x1b[1;35mIf\x1b[0m", .{});
+                result = .{ .node = condition };
+            },
+            .if_statement_else => {
+                const condition = self.data.as(.two).a;
+                const body = absoluteIndex(index, self.data.as(.four).c);
+                const else_clause = absoluteIndex(index, self.data.as(.four).d);
+                try writer.print("\x1b[1;35mIf\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ condition, body, else_clause });
+            },
+            .if_statement_no_body_else => {
+                const condition = self.data.as(.two).a;
+                const else_clause = self.data.as(.two).b;
+                try writer.print("\x1b[1;35mIf\x1b[0m", .{});
+                result = NodeRangeOrNode.initNodes(&.{ condition, else_clause });
+            },
+            .empty_statement => {
+                try writer.print("\x1b[1;35mEmptyStatement\x1b[0m", .{});
             },
             else => try writer.print("tbd {}", .{self.kind}),
         }
@@ -513,13 +1098,10 @@ pub const Parser = struct {
         var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
         try self.handlePP();
 
-        while (self.hasNext()) {
+        var ptok = self.peekToken();
+        while (ptok) |_| : (ptok = self.peekToken()) {
             const node_index = try self.parseExternalDeclaration();
             try these_nodes.append(node_index);
-            // if (node_range.count == 0) break;
-            // for (node_range.start..node_range.start + node_range.count) |index| {
-            //     try these_nodes.append(self.unit.node_ranges.items[index]);
-            // }
         }
 
         const starti = self.unit.node_ranges.items.len;
@@ -533,7 +1115,7 @@ pub const Parser = struct {
 
     pub fn parseExternalDeclaration(self: *Self) !NodeIndex {
         try self.handlePP();
-        return try self.parseDeclaration();
+        return try self.parseDeclaration(true);
         // const ptok = self.peekToken() orelse return null;
 
         // const node = switch (ptok.kind) {
@@ -556,24 +1138,145 @@ pub const Parser = struct {
         // return try self.createNode(node);
     }
 
-    pub fn parseDeclaration(self: *Self) !NodeIndex {
-        var ptok = self.peekToken();
+    pub fn parseDeclaration(self: *Self, toplevel: bool) !NodeIndex {
         var storage_class: StorageClass.Type = 0;
+
+        var ptok = self.peekToken();
+        if (ptok != null and ptok.?.kind == .static_assert) {
+            const result = try self.parseStaticAssert();
+            _ = try self.expect(.semicolon);
+            return result;
+        }
+
+        const type_node = try self.parseDeclarationSpecifiers(&storage_class);
+        ptok = self.peekToken();
+
+        var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
+        defer these_nodes.deinit();
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.kind) {
+                .semicolon => {
+                    _ = self.nextToken();
+                    if (these_nodes.items.len == 0) {
+                        return type_node;
+                    }
+                    break;
+                },
+                else => {
+                    var this_ident: ?u32 = null;
+                    const this_type = try self.parseDeclarator(type_node, &this_ident);
+
+                    if (this_type.is_function and !this_type.is_function_ptr) {
+                        var decl_node_data: NodeData = undefined;
+                        decl_node_data.as(.two).a = this_ident orelse @panic("TODO: expected identifier in variable decl");
+
+                        ptok = self.peekToken();
+                        if (toplevel and these_nodes.items.len == 0 and ptok != null and ptok.?.kind == .open_brace) {
+                            const body = try self.parseCompoundStatement();
+                            decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type.node.?));
+                            decl_node_data.as(.four).d = @truncate(self.relativeOffset(body));
+
+                            return try self.createNode(Node{
+                                .kind = .function_declaration_body,
+                                .data = decl_node_data,
+                            });
+                        }
+
+                        decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type.node.?));
+                        try these_nodes.append(try self.createNode(Node{
+                            .kind = .function_declaration,
+                            .data = decl_node_data,
+                        }));
+                    } else {
+                        if (this_ident == null) {
+                            try these_nodes.append(this_type.node.?);
+                            continue;
+                        }
+
+                        var kind = NodeKind.var_declaration;
+                        var decl_node_data: NodeData = undefined;
+                        decl_node_data.as(.two).a = this_ident orelse @panic("TODO: expected identifier in variable decl");
+
+                        ptok = self.peekToken();
+                        if (ptok != null and ptok.?.kind == .assignment) {
+                            _ = self.nextToken();
+
+                            const decl_init = try self.parseInitializer();
+                            decl_node_data.as(.four).d = @truncate(self.relativeOffset(decl_init));
+                            kind = .var_declaration_init;
+                        } else if ((storage_class & StorageClass.typedef) > 0) {
+                            try self.unit.type_names.put(self.unit.identifierAt(this_ident.?), {});
+                        }
+
+                        decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type.node.?));
+
+                        try these_nodes.append(try self.createNode(Node{
+                            .kind = kind,
+                            .data = decl_node_data,
+                        }));
+                    }
+                },
+            }
+
+            ptok = self.peekToken();
+            if (ptok == null) continue;
+            switch (ptok.?.kind) {
+                .comma => {
+                    _ = self.nextToken();
+                },
+                .semicolon => {
+                    _ = self.nextToken();
+                    break;
+                },
+                else => std.debug.panic("TODO: unexpected token {}", .{ptok.?.kind}),
+            }
+        }
+
+        const starti = self.unit.node_ranges.items.len;
+        try self.unit.node_ranges.appendSlice(these_nodes.items);
+
+        var decl_node_data: NodeData = undefined;
+        decl_node_data.as(.two).a = @truncate(starti);
+        decl_node_data.as(.four).c = @truncate(these_nodes.items.len);
+        decl_node_data.as(.four).d = storage_class;
+
+        const decl_node = try self.createNode(Node{
+            .kind = .declaration,
+            .data = decl_node_data,
+        });
+
+        return decl_node;
+    }
+
+    pub fn parseDeclarationSpecifiers(self: *Self, storage_class: *StorageClass.Type) (ParseError || std.mem.Allocator.Error)!NodeIndex {
+        var ptok = self.peekToken();
         var type_qualifier: TypeQualifier.Type = 0;
         var type_kind: ?NodeKind = null;
         var type_name_token: tok.TokenIndex = undefined;
 
         while (ptok) |p| : (ptok = self.peekToken()) {
             switch (p.kind) {
-                .atomic => type_qualifier |= TypeQualifier.atomic,
-                .auto => storage_class |= StorageClass.auto,
+                .atomic => {
+                    _ = self.nextToken();
+                    ptok = self.peekToken();
+                    if (ptok != null and ptok.?.kind == .open_paren) {
+                        _ = self.nextToken();
+                        type_kind = .atomic_type;
+                        type_name_token = (try self.expect(.type_name)).start;
+                        _ = try self.expect(.close_paren);
+                    } else {
+                        type_qualifier |= TypeQualifier.atomic;
+                    }
+                    continue;
+                },
+                .auto => storage_class.* |= StorageClass.auto,
                 .@"const" => type_qualifier |= TypeQualifier.@"const",
-                .@"extern" => storage_class |= StorageClass.@"extern",
-                .register => storage_class |= StorageClass.register,
+                .@"extern" => storage_class.* |= StorageClass.@"extern",
+                .register => storage_class.* |= StorageClass.register,
                 .restrict => type_qualifier |= TypeQualifier.restrict,
-                .static => storage_class |= StorageClass.static,
-                .thread_local => storage_class |= StorageClass.thread_local,
-                .typedef => storage_class |= StorageClass.typedef,
+                .static => storage_class.* |= StorageClass.static,
+                .thread_local => storage_class.* |= StorageClass.thread_local,
+                .typedef => storage_class.* |= StorageClass.typedef,
                 .@"volatile" => type_qualifier |= TypeQualifier.@"volatile",
 
                 .unsigned => {
@@ -666,134 +1369,518 @@ pub const Parser = struct {
                     }
                 },
                 .bool => type_kind = .bool_type,
+                .@"struct", .@"union" => return try self.parseStructOrUnion(),
+                .@"enum" => return try self.parseEnum(),
 
                 .type_name => {
                     type_kind = .type_name;
                     type_name_token = p.start;
                 },
-                .identifier => break,
 
-                .semicolon => {
-                    break;
-                },
-
-                else => std.debug.panic("TODO: unexpected token {}", .{p.kind}),
+                else => break,
             }
-            _ = self.tokenizer.next();
+            _ = self.nextToken();
         }
 
         var type_node_data: NodeData = undefined;
         switch (type_kind.?) {
-            .type_name => {
+            .type_name, .atomic_type => {
                 type_node_data.two.a = type_name_token;
             },
-            else => {
-                type_node_data.eight.a = type_qualifier;
-            },
+            else => {},
         }
+        type_node_data.eight.h = type_qualifier;
 
         const type_node = try self.createNode(Node{
             .kind = type_kind.?,
             .data = type_node_data,
         });
 
-        ptok = self.peekToken();
+        return type_node;
+    }
+
+    pub const DeclaratorResult = struct {
+        node: ?NodeIndex = null,
+        is_function: bool = false,
+        is_function_ptr: bool = false,
+        is_pointer: bool = false,
+    };
+
+    pub fn parseDeclarator(self: *Self, base_type: NodeIndex, identifier: *?u32) !DeclaratorResult {
+        const ptok = self.peekToken() orelse @panic("ran out of tokens");
+        switch (ptok.kind) {
+            .star => {
+                _ = self.nextToken();
+                const type_qualifier = self.parseAnyTypeQualifiers();
+                const element_type = try self.parseDeclarator(base_type, identifier);
+
+                return .{
+                    .node = try self.createNode(Node{
+                        .kind = .pointer,
+                        .data = .{
+                            .two = .{
+                                .a = element_type.node.?,
+                                .b = type_qualifier,
+                            },
+                        },
+                    }),
+                    .is_function = element_type.is_function,
+                    .is_function_ptr = element_type.is_function_ptr,
+                    .is_pointer = true,
+                };
+            },
+            else => return try self.parseDirectDeclarator(base_type, identifier),
+        }
+    }
+
+    fn parseDirectDeclarator(self: *Self, base_type: NodeIndex, identifier: *?u32) (ParseError || std.mem.Allocator.Error)!DeclaratorResult {
+        var ptok = self.peekToken() orelse @panic("ran out of tokens");
+        var left = DeclaratorResult{};
+
+        switch (ptok.kind) {
+            .identifier => {
+                _ = self.nextToken();
+                identifier.* = ptok.start;
+                left = .{ .node = base_type };
+            },
+            .open_paren => {
+                _ = self.nextToken();
+                const ntok = self.peekToken();
+                // if (ntok != null and ntok.?.kind != .open_paren and ntok.?.kind != .open_bracket and ntok.?.kind != ) {
+                // }
+                if (ntok != null and (ntok.?.kind == .star or ntok.?.kind == .identifier)) {
+                    left = try self.parseDeclarator(base_type, identifier);
+                    _ = try self.expect(.close_paren);
+                } else {
+                    left = .{
+                        .node = try self.parseParameters(base_type),
+                        .is_function = true,
+                        .is_function_ptr = left.is_pointer,
+                    };
+                }
+            },
+            else => {
+                left = .{ .node = base_type };
+            },
+        }
+
+        ptok = self.peekToken() orelse return left;
+        while (true) : (ptok = self.peekToken() orelse break) {
+            switch (ptok.kind) {
+                .open_bracket => {
+                    _ = self.nextToken();
+                    var type_qualifiers = self.parseAnyTypeQualifiers();
+                    ptok = self.peekToken() orelse @panic("unexpecteed EOF");
+
+                    var node_data: NodeData = undefined;
+                    node_data.as(.two).a = left.node.?;
+                    node_data.as(.eight).h = type_qualifiers;
+
+                    switch (ptok.kind) {
+                        .close_bracket => {
+                            _ = self.nextToken();
+                            // node_data.as(.two).a = (try self.parseDirectDeclarator(base_type, base_ident, identifier)) orelse base_ident.*.?;
+
+                            left.node = try self.createNode(Node{
+                                .kind = .array_type,
+                                .data = node_data,
+                            });
+                        },
+                        .star => {
+                            _ = self.nextToken();
+                            _ = try self.expect(.close_bracket);
+                            // node_data.as(.two).a = (try self.parseDirectDeclarator(base_type, base_ident, identifier)) orelse base_ident.*.?;
+
+                            left.node = try self.createNode(Node{
+                                .kind = .array_type_variable,
+                                .data = node_data,
+                            });
+                        },
+                        .static => {
+                            _ = self.nextToken();
+                            type_qualifiers |= self.parseAnyTypeQualifiers();
+                            node_data.as(.eight).h = type_qualifiers;
+                            const size_expr = try self.parseExpression();
+                            _ = try self.expect(.close_bracket);
+                            // node_data.as(.two).a = (try self.parseDirectDeclarator(base_type, base_ident, identifier)) orelse base_ident.*.?;
+
+                            node_data.as(.four).c = @truncate(self.relativeOffset(size_expr));
+
+                            left.node = try self.createNode(Node{
+                                .kind = .array_type_static,
+                                .data = node_data,
+                            });
+                        },
+                        else => {
+                            const size_expr = try self.parseExpression();
+                            _ = try self.expect(.close_bracket);
+                            // std.log.info("{} {} {}", .{ node_data.as(.two).a, size_expr, self.unit.nodes.items.len });
+                            // node_data.as(.two).a = (try self.parseDirectDeclarator(base_type, base_ident, identifier)) orelse base_ident.*.?;
+
+                            node_data.as(.four).c = @truncate(self.relativeOffset(size_expr));
+
+                            left.node = try self.createNode(Node{
+                                .kind = .array_type_fixed,
+                                .data = node_data,
+                            });
+                        },
+                    }
+                },
+                .open_paren => {
+                    _ = self.nextToken();
+                    left.node = try self.parseParameters(left.node.?);
+                    left.is_function = true;
+                    left.is_function_ptr = left.is_pointer;
+                },
+                else => return left,
+            }
+        }
+
+        return left;
+    }
+
+    pub fn parseParameters(self: *Self, replacement: NodeIndex) !NodeIndex {
+        const parameters = try self.parseParameterList();
+
+        var node_kind: NodeKind = undefined;
+        var node_data: NodeData = undefined;
+        node_data.as(.four).a = @truncate(self.relativeOffset(replacement));
+        switch (parameters) {
+            .none => {
+                node_kind = .function_type;
+            },
+            .one => |o| {
+                node_kind = .function_type_one_parameter;
+                node_data.as(.four).b = @truncate(self.relativeOffset(o));
+            },
+            .range => |rng| {
+                node_kind = .function_type_parameter;
+                node_data.as(.four).b = @truncate(self.relativeOffset(rng.start));
+                node_data.as(.eight).g = @truncate(rng.count);
+            },
+        }
+
+        return try self.createNode(Node{
+            .kind = node_kind,
+            .data = node_data,
+        });
+    }
+
+    const Parameters = union(enum) {
+        none: void,
+        one: NodeIndex,
+        range: NodeRange,
+    };
+
+    pub fn parseParameterList(self: *Self) !Parameters {
         var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
         defer these_nodes.deinit();
+
+        var ptok = self.peekToken();
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.kind) {
+                .comma => {
+                    _ = self.nextToken();
+                    continue;
+                },
+                .close_paren => {
+                    _ = self.nextToken();
+                    break;
+                },
+                .ellipsis => {
+                    _ = self.nextToken();
+                    _ = try self.expect(.close_paren);
+                    try these_nodes.append(try self.createNode(Node{
+                        .kind = .parameter_ellipsis,
+                        .data = undefined,
+                    }));
+                    break;
+                },
+                else => {},
+            }
+
+            var storage_class: StorageClass.Type = 0;
+            var identifier: ?u32 = null;
+            const type_node = try self.parseDeclarationSpecifiers(&storage_class);
+
+            const full_type = try self.parseDeclarator(type_node, &identifier);
+
+            var node_data: NodeData = undefined;
+            node_data.as(.four).a = @truncate(self.relativeOffset(full_type.node.?));
+            node_data.as(.eight).c = storage_class;
+
+            if (identifier) |ident| {
+                node_data.as(.two).b = ident;
+                try these_nodes.append(try self.createNode(Node{
+                    .kind = .parameter_ident,
+                    .data = node_data,
+                }));
+            } else {
+                try these_nodes.append(try self.createNode(Node{
+                    .kind = .parameter,
+                    .data = node_data,
+                }));
+            }
+        }
+
+        var result: Parameters = undefined;
+
+        if (these_nodes.items.len == 0) {
+            result = .{ .none = {} };
+        } else if (these_nodes.items.len == 1) {
+            result = .{ .one = these_nodes.items[0] };
+        } else {
+            const start_type_nodes = self.unit.node_ranges.items.len;
+            try self.unit.node_ranges.appendSlice(these_nodes.items);
+            result = .{
+                .range = .{
+                    .start = @truncate(start_type_nodes),
+                    .count = @truncate(these_nodes.items.len),
+                },
+            };
+        }
+
+        return result;
+    }
+
+    pub fn parseStructOrUnion(self: *Self) !NodeIndex {
+        const is_struct = self.nextToken().?.kind == .@"struct";
+        const ptok = self.peekToken() orelse @panic("unexpcted eof");
+        const ident = if (ptok.kind == .identifier) blk: {
+            _ = self.nextToken();
+            break :blk ptok.start;
+        } else null;
+
+        const ntok = self.peekToken();
+        if (ntok != null and ntok.?.kind == .open_brace) {
+            _ = self.nextToken();
+
+            const members_range = try self.parseStructDeclarations();
+            defer {
+                _ = self.expect(.close_brace) catch @panic("uhoh");
+            }
+
+            if (ident) |i| {
+                _ = try self.createNode(Node{
+                    .kind = .range,
+                    .data = .{
+                        .two = .{ .a = members_range.start, .b = members_range.count },
+                    },
+                });
+
+                return try self.createNode(Node{
+                    .kind = if (is_struct) .struct_ident else .union_ident,
+                    .data = .{
+                        .two = .{
+                            .a = i,
+                            .b = undefined,
+                        },
+                    },
+                });
+            } else {
+                return try self.createNode(Node{
+                    .kind = if (is_struct) .@"struct" else .union_ident,
+                    .data = .{
+                        .two = .{ .a = members_range.start, .b = members_range.count },
+                    },
+                });
+            }
+        } else {
+            return try self.createNode(Node{
+                .kind = if (is_struct) .struct_forward else .union_forward,
+                .data = .{
+                    .two = .{ .a = ident.?, .b = undefined },
+                },
+            });
+        }
+    }
+
+    pub fn parseStructDeclarations(self: *Self) !NodeRange {
+        var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
+        defer these_nodes.deinit();
+        var storage_class: StorageClass.Type = 0;
+
+        var ptok = self.peekToken();
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            if (p.kind == .close_brace) {
+                break;
+            } else if (p.kind == .static_assert) {
+                try these_nodes.append(try self.parseStaticAssert());
+                _ = try self.expect(.semicolon);
+                continue;
+            }
+            const member_type = try self.parseDeclarationSpecifiers(&storage_class);
+            try self.parseStructDeclarator(member_type, &these_nodes);
+
+            _ = try self.expect(.semicolon);
+        }
+
+        const starti = self.unit.node_ranges.items.len;
+        try self.unit.node_ranges.appendSlice(these_nodes.items);
+
+        return .{
+            .start = @truncate(starti),
+            .count = @truncate(these_nodes.items.len),
+        };
+    }
+
+    pub fn parseStructDeclarator(self: *Self, member_type: NodeIndex, nodes: *std.ArrayList(NodeIndex)) !void {
+        var ptok = self.peekToken();
         while (ptok) |p| : (ptok = self.peekToken()) {
             switch (p.kind) {
                 .semicolon => {
-                    _ = self.tokenizer.next();
                     break;
                 },
-                else => {
-                    var this_ident: u32 = undefined;
-                    const this_type = (try self.parseDeclarator(type_node, &this_ident)).?;
+                .comma => {
+                    _ = self.nextToken();
+                },
+                .colon => {
+                    var node_data: NodeData = undefined;
 
-                    var kind = NodeKind.var_declaration;
-                    var decl_node_data: NodeData = undefined;
-                    decl_node_data.as(.two).a = this_ident;
+                    _ = self.nextToken();
+                    const expr = try self.parseOperatorExpression(30);
+                    node_data.as(.four).c = @truncate(self.relativeOffset(member_type));
+                    node_data.as(.four).d = @truncate(self.relativeOffset(expr));
+
+                    try nodes.append(try self.createNode(Node{
+                        .kind = .member_bitfield,
+                        .data = node_data,
+                    }));
+                },
+                else => {
+                    var identifier: ?u32 = null;
+                    const declarator = try self.parseDeclarator(member_type, &identifier);
+
+                    var node_data: NodeData = undefined;
+                    if (identifier) |i| node_data.as(.two).a = i;
+
+                    const ntok = self.peekToken();
+                    if (ntok != null and ntok.?.kind == .colon) {
+                        _ = self.nextToken();
+                        const expr = try self.parseOperatorExpression(30);
+                        node_data.as(.four).c = @truncate(self.relativeOffset(declarator.node.?));
+                        node_data.as(.four).d = @truncate(self.relativeOffset(expr));
+
+                        try nodes.append(try self.createNode(Node{
+                            .kind = if (identifier == null) .member_bitfield else .member_ident_bitfield,
+                            .data = node_data,
+                        }));
+                    } else {
+                        node_data.as(.four).c = @truncate(self.relativeOffset(declarator.node.?));
+                        try nodes.append(try self.createNode(Node{
+                            .kind = if (identifier == null) .member else .member_ident,
+                            .data = node_data,
+                        }));
+                    }
+                },
+            }
+        }
+    }
+
+    pub fn parseEnum(self: *Self) !NodeIndex {
+        _ = self.nextToken();
+        const ptok = self.peekToken() orelse @panic("unexpcted eof");
+        const ident = if (ptok.kind == .identifier) blk: {
+            _ = self.nextToken();
+            break :blk ptok.start;
+        } else null;
+
+        const ntok = self.peekToken();
+        if (ntok != null and ntok.?.kind == .open_brace) {
+            _ = self.nextToken();
+
+            const members = try self.parseEnumMembers();
+
+            defer {
+                _ = self.expect(.close_brace) catch @panic("no brace");
+            }
+
+            if (ident) |i| {
+                _ = try self.createNode(Node{
+                    .kind = .range,
+                    .data = .{
+                        .two = .{ .a = members.start, .b = members.count },
+                    },
+                });
+                return try self.createNode(Node{
+                    .kind = .enum_ident,
+                    .data = .{
+                        .two = .{ .a = i, .b = undefined },
+                    },
+                });
+            } else {
+                return try self.createNode(Node{
+                    .kind = .@"enum",
+                    .data = .{
+                        .two = .{ .a = members.start, .b = members.count },
+                    },
+                });
+            }
+        } else {
+            return try self.createNode(Node{
+                .kind = .enum_forward,
+                .data = .{
+                    .two = .{ .a = ident.?, .b = undefined },
+                },
+            });
+        }
+    }
+
+    pub fn parseEnumMembers(self: *Self) !NodeRange {
+        var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
+        var ptok = self.peekToken();
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.kind) {
+                .open_brace => {
+                    break;
+                },
+                .identifier => {
+                    const ident = self.nextToken().?;
 
                     ptok = self.peekToken();
                     if (ptok != null and ptok.?.kind == .assignment) {
-                        _ = self.tokenizer.next();
+                        _ = self.nextToken();
+                        const expr = try self.parseOperatorExpression(30);
 
-                        const decl_init = try self.parseInitializer();
-                        decl_node_data.as(.four).d = @truncate(self.relativeOffset(decl_init));
-                        kind = .var_declaration_init;
+                        try these_nodes.append(try self.createNode(Node{
+                            .kind = .enum_member_value,
+                            .data = .{
+                                .two = .{
+                                    .a = ident.start,
+                                    .b = expr,
+                                },
+                            },
+                        }));
+                    } else {
+                        try these_nodes.append(try self.createNode(Node{
+                            .kind = .enum_member,
+                            .data = .{
+                                .two = .{
+                                    .a = ident.start,
+                                    .b = undefined,
+                                },
+                            },
+                        }));
                     }
 
-                    decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type));
-
-                    try these_nodes.append(try self.createNode(Node{
-                        .kind = kind,
-                        .data = decl_node_data,
-                    }));
+                    ptok = self.peekToken();
+                    if (ptok != null and ptok.?.kind == .comma) {
+                        _ = self.nextToken();
+                    } else {
+                        break;
+                    }
                 },
-            }
-
-            ptok = self.peekToken();
-            if (ptok == null) continue;
-            switch (ptok.?.kind) {
-                .comma => {
-                    _ = self.tokenizer.next();
-                },
-                .semicolon => {
-                    _ = self.tokenizer.next();
-                    break;
-                },
-                else => @panic("TODO: unexpected token"),
+                else => {},
             }
         }
 
         const starti = self.unit.node_ranges.items.len;
         try self.unit.node_ranges.appendSlice(these_nodes.items);
 
-        var decl_node_data: NodeData = undefined;
-        decl_node_data.as(.two).a = @truncate(starti);
-        decl_node_data.as(.four).c = @truncate(these_nodes.items.len);
-        decl_node_data.as(.four).d = storage_class;
-
-        const decl_node = try self.createNode(Node{
-            .kind = .declaration,
-            .data = decl_node_data,
-        });
-
-        return decl_node;
-    }
-
-    pub fn parseDeclarator(self: *Self, base_type: NodeIndex, identifier: *u32) !?NodeIndex {
-        const ptok = self.peekToken() orelse @panic("ran out of tokens");
-        switch (ptok.kind) {
-            .identifier => {
-                _ = self.nextToken();
-                identifier.* = ptok.start;
-                return base_type;
-                // return try self.createNodeAndNext(Node{
-                //     .kind = .declaration,
-                //     .data = .{ .two = .{
-                //         .a = ptok.start,
-                //         .b = base_type,
-                //     } },
-                // });
-            },
-            .star => {
-                _ = self.nextToken();
-                const type_qualifier = self.parseAnyTypeQualifiers();
-                const element_type = (try self.parseDeclarator(base_type, identifier)).?;
-
-                return try self.createNodeAndNext(Node{
-                    .kind = .pointer,
-                    .data = .{
-                        .two = .{
-                            .a = element_type,
-                            .b = type_qualifier,
-                        },
-                    },
-                });
-            },
-            else => return null,
-        }
+        return .{
+            .start = @truncate(starti),
+            .count = @truncate(these_nodes.items.len),
+        };
     }
 
     fn parseAnyTypeQualifiers(self: *Self) TypeQualifier.Type {
@@ -805,8 +1892,9 @@ pub const Parser = struct {
                 .@"volatile" => result |= TypeQualifier.@"volatile",
                 .restrict => result |= TypeQualifier.restrict,
                 .atomic => result |= TypeQualifier.atomic,
-                else => {},
+                else => break,
             }
+            _ = self.nextToken();
         }
         return result;
     }
@@ -833,8 +1921,529 @@ pub const Parser = struct {
         };
     }
 
-    pub fn parseInitializer(self: *Self) !NodeIndex {
-        return try self.parseExpression();
+    pub fn parseInitializer(self: *Self) (ParseError || std.mem.Allocator.Error)!NodeIndex {
+        const ptok = self.peekToken() orelse @panic("Unexpected eof");
+        switch (ptok.kind) {
+            .open_brace => return self.parseInitializerList(),
+            else => return try self.parseOperatorExpression(20),
+        }
+    }
+
+    pub fn parseInitializerList(self: *Self) !NodeIndex {
+        _ = self.nextToken();
+        var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
+        defer these_nodes.deinit();
+
+        var ptok = self.peekToken();
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.kind) {
+                .close_brace => {
+                    _ = self.nextToken();
+                    break;
+                },
+                .dot, .open_bracket => {
+                    const designator = try self.parseDesignator();
+                    _ = try self.expect(.assignment);
+                    const expr = try self.parseInitializer();
+
+                    try these_nodes.append(try self.createNode(Node{
+                        .kind = .designation,
+                        .data = .{
+                            .two = .{ .a = designator, .b = expr },
+                        },
+                    }));
+
+                    ptok = self.peekToken();
+                    if (ptok != null and ptok.?.kind == .comma) {
+                        _ = self.nextToken();
+                    } else {
+                        _ = try self.expect(.close_brace);
+                        break;
+                    }
+                },
+                else => {
+                    try these_nodes.append(try self.parseInitializer());
+                },
+            }
+        }
+
+        if (these_nodes.items.len == 0) {
+            return try self.createNode(Node{
+                .kind = .initializer_list,
+                .data = undefined,
+            });
+        } else if (these_nodes.items.len == 1) {
+            return try self.createNode(Node{
+                .kind = .initializer_list_one,
+                .data = .{
+                    .two = .{ .a = these_nodes.items[0], .b = undefined },
+                },
+            });
+        } else {
+            const starti = self.unit.node_ranges.items.len;
+            try self.unit.node_ranges.appendSlice(these_nodes.items);
+
+            return try self.createNode(Node{
+                .kind = .initializer_list_many,
+                .data = .{
+                    .two = .{
+                        .a = @truncate(starti),
+                        .b = @truncate(these_nodes.items.len),
+                    },
+                },
+            });
+        }
+    }
+
+    pub fn parseDesignator(self: *Self) !NodeIndex {
+        var ptok = self.peekToken();
+        var left: NodeIndex = undefined;
+        switch (ptok.?.kind) {
+            .dot => {
+                _ = self.nextToken();
+                const ident = try self.expect(.identifier);
+                left = try self.createNode(Node{ .kind = .designator_field_terminal, .data = .{
+                    .two = .{ .a = ident.start, .b = undefined },
+                } });
+            },
+            .open_bracket => {
+                _ = self.nextToken();
+                const expr = try self.parseOperatorExpression(30);
+                _ = try self.expect(.close_bracket);
+                left = try self.createNode(Node{ .kind = .designator_index_terminal, .data = .{
+                    .two = .{ .a = expr, .b = undefined },
+                } });
+            },
+            else => std.debug.panic("Unexpected token, expected . or [ found {}", .{ptok.?.kind}),
+        }
+
+        ptok = self.peekToken();
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.kind) {
+                .dot => {
+                    _ = self.nextToken();
+                    const ident = try self.expect(.identifier);
+                    left = try self.createNode(Node{
+                        .kind = .designator_field,
+                        .data = .{
+                            .two = .{ .a = ident.start, .b = left },
+                        },
+                    });
+                },
+                .open_bracket => {
+                    _ = self.nextToken();
+                    const expr = try self.parseOperatorExpression(30);
+                    _ = try self.expect(.close_bracket);
+                    left = try self.createNode(Node{
+                        .kind = .designator_index,
+                        .data = .{
+                            .two = .{ .a = expr, .b = left },
+                        },
+                    });
+                },
+                else => break,
+            }
+        }
+
+        return left;
+    }
+
+    pub fn parseStaticAssert(self: *Self) !NodeIndex {
+        _ = self.nextToken();
+        _ = try self.expect(.open_paren);
+        defer {
+            _ = self.expect(.close_paren) catch @panic("failed to expect!!!");
+        }
+        const test_expr = try self.parseOperatorExpression(30);
+
+        const ptok = self.peekToken();
+        if (ptok != null and ptok.?.kind == .comma) {
+            _ = self.nextToken();
+            const expr = try self.parsePrimaryExpression();
+            return try self.createNode(Node{
+                .kind = .static_assert_str,
+                .data = .{
+                    .two = .{ .a = test_expr, .b = expr },
+                },
+            });
+        }
+
+        return try self.createNode(Node{
+            .kind = .static_assert,
+            .data = .{
+                .two = .{ .a = test_expr, .b = undefined },
+            },
+        });
+    }
+
+    pub fn parseStatement(self: *Self) !NodeIndex {
+        const ptok = self.peekToken() orelse @panic("unexpected eof");
+        return switch (ptok.kind) {
+            .open_brace => try self.parseCompoundStatement(),
+            .@"while" => {
+                _ = self.nextToken();
+                _ = try self.expect(.open_paren);
+                const condition = try self.parseExpression();
+                _ = try self.expect(.close_paren);
+
+                const ntok = self.peekToken();
+                if (ntok != null and ntok.?.kind == .semicolon) {
+                    _ = self.nextToken();
+                    return try self.createNode(Node{
+                        .kind = .while_loop_empty,
+                        .data = .{
+                            .two = .{ .a = condition, .b = undefined },
+                        },
+                    });
+                }
+
+                const body = try self.parseStatement();
+                return try self.createNode(Node{
+                    .kind = .while_loop,
+                    .data = .{
+                        .two = .{ .a = condition, .b = body },
+                    },
+                });
+            },
+            .do => {
+                _ = self.nextToken();
+                const body = try self.parseStatement();
+
+                _ = try self.expect(.open_paren);
+                const condition = try self.parseExpression();
+                _ = try self.expect(.close_paren);
+
+                const result = try self.createNode(Node{
+                    .kind = .do_while_loop,
+                    .data = .{
+                        .two = .{ .a = condition, .b = body },
+                    },
+                });
+
+                _ = try self.expect(.semicolon);
+
+                return result;
+            },
+            .@"for" => {
+                _ = self.nextToken();
+
+                _ = try self.expect(.open_paren);
+
+                const init_expr = try self.parseDeclOrExprStmt();
+
+                var ntok = self.peekToken();
+                const condition = if (ntok != null and ntok.?.kind == .semicolon)
+                    try self.createNode(Node{ .kind = .empty_statement, .data = undefined })
+                else
+                    try self.parseExpression();
+
+                _ = try self.expect(.semicolon);
+
+                ntok = self.peekToken();
+                const increment = if (ntok != null and ntok.?.kind != .close_paren)
+                    try self.parseExpression()
+                else
+                    null;
+
+                _ = try self.expect(.close_paren);
+
+                var node_data: NodeData = undefined;
+
+                ntok = self.peekToken();
+                if (ntok != null and ntok.?.kind == .semicolon) {
+                    node_data.as(.four).a = @truncate(self.relativeOffset(init_expr));
+                    node_data.as(.four).b = @truncate(self.relativeOffset(condition));
+                    if (increment) |i| {
+                        node_data.as(.four).c = @truncate(self.relativeOffset(i));
+                    }
+
+                    return try self.createNode(Node{
+                        .kind = if (increment == null) .for_loop_empty else .for_loop_empty_inc,
+                        .data = node_data,
+                    });
+                }
+
+                const body = try self.parseStatement();
+                node_data.as(.four).a = @truncate(self.relativeOffset(init_expr));
+                node_data.as(.four).b = @truncate(self.relativeOffset(condition));
+                if (increment) |i| {
+                    node_data.as(.four).c = @truncate(self.relativeOffset(i));
+                }
+                node_data.as(.four).d = @truncate(self.relativeOffset(body));
+
+                return try self.createNode(Node{
+                    .kind = if (increment == null) .for_loop else .for_loop_inc,
+                    .data = node_data,
+                });
+            },
+            .@"if" => {
+                _ = self.nextToken();
+                _ = try self.expect(.open_paren);
+                const condition = try self.parseExpression();
+                _ = try self.expect(.close_paren);
+
+                const body = try self.parseStatement();
+                var node_data: NodeData = undefined;
+                node_data.as(.two).a = condition;
+
+                const ntok = self.peekToken();
+                if (ntok != null and ntok.?.kind == .@"else") {
+                    _ = self.nextToken();
+                    const else_body = try self.parseStatement();
+                    node_data.as(.four).c = @truncate(self.relativeOffset(body));
+                    node_data.as(.four).d = @truncate(self.relativeOffset(else_body));
+
+                    return try self.createNode(Node{
+                        .kind = .if_statement_else,
+                        .data = node_data,
+                    });
+                }
+
+                node_data.as(.two).b = body;
+                return try self.createNode(Node{
+                    .kind = .if_statement,
+                    .data = node_data,
+                });
+            },
+            .@"switch" => {
+                _ = self.nextToken();
+                _ = try self.expect(.open_paren);
+                const value = try self.parseExpression();
+                _ = try self.expect(.close_paren);
+
+                const body = try self.parseStatement();
+
+                return try self.createNode(Node{
+                    .kind = .switch_case,
+                    .data = .{
+                        .two = .{ .a = value, .b = body },
+                    },
+                });
+            },
+            .case => {
+                _ = self.nextToken();
+                const value = try self.parseOperatorExpression(30);
+                _ = try self.expect(.colon);
+
+                const body = try self.parseStatement();
+
+                return try self.createNode(Node{
+                    .kind = .case,
+                    .data = .{
+                        .two = .{ .a = value, .b = body },
+                    },
+                });
+            },
+            .default => {
+                _ = self.nextToken();
+                _ = try self.expect(.colon);
+
+                const body = try self.parseStatement();
+
+                return try self.createNode(Node{
+                    .kind = .default,
+                    .data = .{
+                        .two = .{ .a = body, .b = undefined },
+                    },
+                });
+            },
+            .goto => {
+                _ = self.nextToken();
+                const ident = try self.expect(.identifier);
+                _ = try self.expect(.semicolon);
+
+                return try self.createNode(Node{
+                    .kind = .continue_statement,
+                    .data = .{
+                        .two = .{ .a = ident.start, .b = undefined },
+                    },
+                });
+            },
+            .@"continue" => {
+                _ = self.nextToken();
+                _ = try self.expect(.semicolon);
+
+                return try self.createNode(Node{
+                    .kind = .continue_statement,
+                    .data = undefined,
+                });
+            },
+            .@"break" => {
+                _ = self.nextToken();
+                _ = try self.expect(.semicolon);
+
+                return try self.createNode(Node{
+                    .kind = .break_statement,
+                    .data = undefined,
+                });
+            },
+            .@"return" => {
+                _ = self.nextToken();
+                const ntok = self.peekToken();
+                if (ntok != null and ntok.?.kind == .semicolon) {
+                    _ = self.nextToken();
+                    return try self.createNode(Node{
+                        .kind = .return_statement,
+                        .data = undefined,
+                    });
+                }
+                const expr = try self.parseExpression();
+                _ = try self.expect(.semicolon);
+
+                return try self.createNode(Node{
+                    .kind = .break_statement,
+                    .data = .{
+                        .two = .{
+                            .a = expr,
+                            .b = undefined,
+                        },
+                    },
+                });
+            },
+            .semicolon => {
+                _ = self.nextToken();
+                return try self.createNode(Node{
+                    .kind = .empty_statement,
+                    .data = undefined,
+                });
+            },
+            else => return try self.parseExpression(),
+        };
+    }
+
+    pub fn parseBlockItem(self: *Self, ptok: *const tok.Token) (ParseError || std.mem.Allocator.Error)!NodeIndex {
+        switch (ptok.kind) {
+            .auto,
+            .atomic,
+            .@"const",
+            .@"enum",
+            .@"extern",
+            .@"inline",
+            .noreturn,
+            .register,
+            .restrict,
+            .static,
+            .static_assert,
+            .@"struct",
+            .thread_local,
+            .typedef,
+            .@"union",
+            .void,
+            .@"volatile",
+            .type_name,
+            .unsigned,
+            .signed,
+            .char,
+            .short,
+            .int,
+            .long,
+            .float,
+            .double,
+            .bool,
+            => return try self.parseDeclaration(false),
+            else => return try self.parseStatement(),
+        }
+    }
+
+    pub fn parseDeclOrExprStmt(self: *Self) (ParseError || std.mem.Allocator.Error)!NodeIndex {
+        const ptok = self.peekToken() orelse @panic("Unexpected eof");
+        switch (ptok.kind) {
+            .auto,
+            .atomic,
+            .@"const",
+            .@"enum",
+            .@"extern",
+            .@"inline",
+            .noreturn,
+            .register,
+            .restrict,
+            .static,
+            .static_assert,
+            .@"struct",
+            .thread_local,
+            .typedef,
+            .@"union",
+            .void,
+            .@"volatile",
+            .type_name,
+            .unsigned,
+            .signed,
+            .char,
+            .short,
+            .int,
+            .long,
+            .float,
+            .double,
+            .bool,
+            => return try self.parseDeclaration(false),
+            .semicolon => {
+                _ = self.nextToken();
+                return try self.createNode(Node{
+                    .kind = .empty_statement,
+                    .data = undefined,
+                });
+            },
+            else => {
+                const result = try self.parseExpression();
+                _ = try self.expect(.semicolon);
+                return result;
+            },
+        }
+    }
+
+    pub fn parseCompoundStatement(self: *Self) !NodeIndex {
+        _ = self.nextToken(); // consume {
+        var ptok = self.peekToken();
+        if (ptok != null and ptok.?.kind == .close_brace) {
+            return try self.createNodeAndNext(Node{
+                .kind = .compound_empty,
+                .data = undefined,
+            });
+        }
+
+        const first_node = if (ptok != null) blk: {
+            const result = try self.parseBlockItem(&ptok.?);
+            ptok = self.peekToken();
+            if (ptok != null and ptok.?.kind == .close_brace) {
+                _ = self.nextToken();
+                return try self.createNode(Node{
+                    .kind = .compound_one,
+                    .data = .{
+                        .two = .{ .a = result, .b = undefined },
+                    },
+                });
+            }
+
+            break :blk result;
+        } else @panic("unexpected end of input");
+
+        var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
+        defer these_nodes.deinit();
+        try these_nodes.append(first_node);
+
+        ptok = self.peekToken();
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.kind) {
+                .close_brace => {
+                    _ = self.nextToken();
+                    break;
+                },
+                else => try these_nodes.append(try self.parseBlockItem(&p)),
+            }
+        }
+
+        const starti = self.unit.node_ranges.items.len;
+        try self.unit.node_ranges.appendSlice(these_nodes.items);
+
+        return try self.createNode(Node{
+            .kind = .compound,
+            .data = .{
+                .two = .{
+                    .a = @truncate(starti),
+                    .b = @truncate(these_nodes.items.len),
+                },
+            },
+        });
     }
 
     pub fn parseExpression(self: *Self) (ParseError || std.mem.Allocator.Error)!NodeIndex {
@@ -917,7 +2526,7 @@ pub const Parser = struct {
         };
     }
 
-    pub fn parseOperatorExpression(self: *Self, last_prec: u16) !NodeIndex {
+    pub fn parseOperatorExpression(self: *Self, last_prec: u16) (ParseError || std.mem.Allocator.Error)!NodeIndex {
         var op = self.peekToken();
         var left: NodeIndex = undefined;
         blk: {
@@ -1076,11 +2685,26 @@ pub const Parser = struct {
                     .double = ptok.fvalue(self.unit),
                 },
             },
-            .identifier => Node{
-                .kind = .identifier,
-                .data = .{
-                    .two = .{ .a = ptok.start, .b = 0 },
-                },
+            .identifier => {
+                _ = self.nextToken();
+                const ntok = self.peekToken();
+                if (ntok != null and ntok.?.kind == .colon) {
+                    _ = self.nextToken();
+                    const stmt = try self.parseStatement();
+                    return try self.createNode(Node{
+                        .kind = .label,
+                        .data = .{
+                            .two = .{ .a = ptok.start, .b = stmt },
+                        },
+                    });
+                }
+
+                return self.createNode(Node{
+                    .kind = .identifier,
+                    .data = .{
+                        .two = .{ .a = ptok.start, .b = 0 },
+                    },
+                });
             },
             else => std.debug.panic("Unexpected in primary {}", .{ptok.kind}),
         };
@@ -1140,6 +2764,7 @@ pub const Parser = struct {
             _ = self.nextToken();
             return token.?;
         } else {
+            std.log.err("Found {}", .{token.?.kind});
             return error.UnexpectedToken;
         }
     }
@@ -1171,11 +2796,11 @@ pub const Parser = struct {
     }
 
     fn handlePP(self: *Self) (ParseError || std.mem.Allocator.Error)!void {
-        var token = self.rawPeekToken() orelse return;
         const old_handle_pp = self.in_handle_pp;
         self.in_handle_pp = true;
         defer self.in_handle_pp = old_handle_pp;
 
+        var token = self.peekToken() orelse return;
         switch (token.kind) {
             .pp_directive => {
                 _ = self.tokenizer.nextEOL();
