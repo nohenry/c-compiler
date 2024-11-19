@@ -1,3 +1,4 @@
+#include "inc.cp"
 #define FOO const static
 
 FOO int a = (3);

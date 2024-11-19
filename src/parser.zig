@@ -3,6 +3,7 @@ const Unit = @import("unit.zig").Unit;
 const DefineValue = @import("unit.zig").DefineValue;
 const tok = @import("tokenizer.zig");
 const Tokenizer = tok.Tokenizer;
+const TokenIndex = tok.TokenIndex;
 
 pub const ParseError = error{ OutOfTokens, UnexpectedToken };
 
@@ -11,6 +12,7 @@ pub const NodeKind = enum(u32) {
     int_literal,
     float_literal,
     string_literal,
+    char_literal,
 
     /// node_data: a(u32) = index of lhs, b(u16) = relative index of rhs, c(u16) = operator
     binary_lr_operator,
@@ -396,7 +398,7 @@ pub const Node = extern struct {
                 };
             },
             .var_declaration => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const type_index = absoluteIndex(index, self.data.as(.four).c);
 
                 try writer.print("\x1b[1;35mVarDeclaration\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
@@ -406,7 +408,7 @@ pub const Node = extern struct {
                 };
             },
             .var_declaration_init => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const type_index = absoluteIndex(index, self.data.as(.four).c);
                 const init_index = absoluteIndex(index, self.data.as(.four).d);
 
@@ -418,7 +420,7 @@ pub const Node = extern struct {
                 });
             },
             .function_declaration_body => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const type_index = absoluteIndex(index, self.data.as(.four).c);
                 const body_index = absoluteIndex(index, self.data.as(.four).d);
 
@@ -430,7 +432,7 @@ pub const Node = extern struct {
                 });
             },
             .function_declaration => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const type_index = absoluteIndex(index, self.data.as(.four).c);
 
                 try writer.print("\x1b[1;35mFunctionDeclaration\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
@@ -567,11 +569,11 @@ pub const Node = extern struct {
                 };
             },
             .struct_forward => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 try writer.print("\x1b[1;35mStruct\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
             },
             .struct_ident => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const member_range_index = absoluteIndex(index, 1);
                 const member_range = unit.nodes.items[member_range_index];
                 try writer.print("\x1b[1;35mStruct\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
@@ -593,7 +595,7 @@ pub const Node = extern struct {
                 };
             },
             .member_ident => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const type_index = absoluteIndex(index, self.data.as(.four).c);
                 try writer.print("\x1b[1;35mMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
 
@@ -609,7 +611,7 @@ pub const Node = extern struct {
                 result = NodeRangeOrNode.initNodes(&.{ type_index, bitfield_index });
             },
             .member_ident_bitfield => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const type_index = absoluteIndex(index, self.data.as(.four).c);
                 const bitfield_index = absoluteIndex(index, self.data.as(.four).d);
                 try writer.print("\x1b[1;35mMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
@@ -629,7 +631,7 @@ pub const Node = extern struct {
                 };
             },
             .enum_ident => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 try writer.print("\x1b[1;35mEnum\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
 
                 const member_range_index = absoluteIndex(index, 1);
@@ -644,15 +646,15 @@ pub const Node = extern struct {
                 };
             },
             .enum_forward => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 try writer.print("\x1b[1;35mEnum\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
             },
             .enum_member => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 try writer.print("\x1b[1;35mMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
             },
             .enum_member_value => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const value_index = self.data.as(.two).b;
                 try writer.print("\x1b[1;35mMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
 
@@ -668,7 +670,7 @@ pub const Node = extern struct {
             },
             .parameter_ident => {
                 const type_index = absoluteIndex(index, self.data.as(.four).a);
-                const ident_index = self.data.as(.two).b;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const storage_class = self.data.as(.eight).c;
                 try writer.print("\x1b[1;35mParameter\x1b[0m \x1b[1;36m'{s}'\x1b[0m ", .{unit.identifierAt(ident_index)});
                 try StorageClass.write(storage_class, writer);
@@ -679,21 +681,21 @@ pub const Node = extern struct {
                 try writer.print("\x1b[1;35mParameterEllipsis\x1b[0m ", .{});
             },
             .type_name => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const qualifier = self.data.as(.eight).h;
 
                 try writer.print("\x1b[1;35mType\x1b[0m \x1b[32m{s}\x1b[0m ", .{unit.identifierAt(ident_index)});
                 try TypeQualifier.write(qualifier, writer);
             },
             .atomic_type => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const qualifier = self.data.as(.eight).h;
 
                 try writer.print("\x1b[1;35mAtomic\x1b[0m \x1b[32m{s}\x1b[0m ", .{unit.identifierAt(ident_index)});
                 try TypeQualifier.write(qualifier, writer);
             },
             .identifier => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
 
                 try writer.print("\x1b[1;35mIdentifier\x1b[0m \x1b[33m{s}\x1b[0m", .{unit.identifierAt(ident_index)});
             },
@@ -770,7 +772,7 @@ pub const Node = extern struct {
                 result = .{ .node = index_expr };
             },
             .designator_field_terminal => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 try writer.print("\x1b[1;35mDesignatorField\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
             },
             .designator_index => {
@@ -781,7 +783,7 @@ pub const Node = extern struct {
                 result = NodeRangeOrNode.initNodes(&.{ prev, index_expr });
             },
             .designator_field => {
-                const ident_index = self.data.as(.two).a;
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const prev = self.data.as(.two).b;
                 try writer.print("\x1b[1;35mDesignatorField\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
                 result = .{ .node = prev };
@@ -914,13 +916,13 @@ pub const Node = extern struct {
                 result = .{ .node = statement };
             },
             .label => {
-                const ident = self.data.as(.two).a;
+                const ident: TokenIndex = @bitCast(self.data.as(.two).a);
                 const statement = self.data.as(.two).b;
                 try writer.print("\x1b[1;35mLabel\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident)});
                 result = .{ .node = statement };
             },
             .goto => {
-                const ident = self.data.as(.two).a;
+                const ident: TokenIndex = @bitCast(self.data.as(.two).a);
                 try writer.print("\x1b[1;35mLabel\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident)});
             },
             .continue_statement => {
@@ -1077,8 +1079,8 @@ pub const Parser = struct {
     allocator: std.mem.Allocator,
     unit: *Unit,
     tokenizer: *Tokenizer,
-    virtual_tokens: std.ArrayList(tok.Token),
-    virtual_token_next: u32 = 0,
+    // virtual_tokens: std.ArrayList(tok.Token),
+    // virtual_token_next: u32 = 0,
     in_handle_pp: bool = false,
 
     expansion_argument_map: std.StringHashMap(DefineValue),
@@ -1089,7 +1091,7 @@ pub const Parser = struct {
             .allocator = unit.allocator,
             .unit = unit,
             .tokenizer = tokenizer,
-            .virtual_tokens = std.ArrayList(tok.Token).init(unit.allocator),
+            // .virtual_tokens = std.ArrayList(tok.Token).init(unit.allocator),
             .expansion_argument_map = std.StringHashMap(DefineValue).init(unit.allocator),
         };
     }
@@ -1163,12 +1165,12 @@ pub const Parser = struct {
                     break;
                 },
                 else => {
-                    var this_ident: ?u32 = null;
+                    var this_ident: ?TokenIndex = null;
                     const this_type = try self.parseDeclarator(type_node, &this_ident);
 
                     if (this_type.is_function and !this_type.is_function_ptr) {
                         var decl_node_data: NodeData = undefined;
-                        decl_node_data.as(.two).a = this_ident orelse @panic("TODO: expected identifier in variable decl");
+                        decl_node_data.as(.two).a = @bitCast(this_ident orelse @panic("TODO: expected identifier in variable decl"));
 
                         ptok = self.peekToken();
                         if (toplevel and these_nodes.items.len == 0 and ptok != null and ptok.?.kind == .open_brace) {
@@ -1195,7 +1197,7 @@ pub const Parser = struct {
 
                         var kind = NodeKind.var_declaration;
                         var decl_node_data: NodeData = undefined;
-                        decl_node_data.as(.two).a = this_ident orelse @panic("TODO: expected identifier in variable decl");
+                        decl_node_data.as(.two).a = @bitCast(this_ident orelse @panic("TODO: expected identifier in variable decl"));
 
                         ptok = self.peekToken();
                         if (ptok != null and ptok.?.kind == .assignment) {
@@ -1205,7 +1207,7 @@ pub const Parser = struct {
                             decl_node_data.as(.four).d = @truncate(self.relativeOffset(decl_init));
                             kind = .var_declaration_init;
                         } else if ((storage_class & StorageClass.typedef) > 0) {
-                            try self.unit.type_names.put(self.unit.identifierAt(this_ident.?), {});
+                            try self.unit.type_names.put(self.unit.identifierAt(@bitCast(this_ident.?)), {});
                         }
 
                         decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type.node.?));
@@ -1249,12 +1251,16 @@ pub const Parser = struct {
     }
 
     pub fn parseDeclarationSpecifiers(self: *Self, storage_class: *StorageClass.Type) (ParseError || std.mem.Allocator.Error)!NodeIndex {
+        var tidx = self.peekTokenIndex();
         var ptok = self.peekToken();
         var type_qualifier: TypeQualifier.Type = 0;
         var type_kind: ?NodeKind = null;
         var type_name_token: tok.TokenIndex = undefined;
 
-        while (ptok) |p| : (ptok = self.peekToken()) {
+        while (ptok) |p| : ({
+            ptok = self.peekToken();
+            tidx = self.peekTokenIndex();
+        }) {
             switch (p.kind) {
                 .atomic => {
                     _ = self.nextToken();
@@ -1262,7 +1268,7 @@ pub const Parser = struct {
                     if (ptok != null and ptok.?.kind == .open_paren) {
                         _ = self.nextToken();
                         type_kind = .atomic_type;
-                        type_name_token = (try self.expect(.type_name)).start;
+                        type_name_token = try self.expectIndex(.type_name);
                         _ = try self.expect(.close_paren);
                     } else {
                         type_qualifier |= TypeQualifier.atomic;
@@ -1374,7 +1380,7 @@ pub const Parser = struct {
 
                 .type_name => {
                     type_kind = .type_name;
-                    type_name_token = p.start;
+                    type_name_token = tidx;
                 },
 
                 else => break,
@@ -1385,7 +1391,7 @@ pub const Parser = struct {
         var type_node_data: NodeData = undefined;
         switch (type_kind.?) {
             .type_name, .atomic_type => {
-                type_node_data.two.a = type_name_token;
+                type_node_data.two.a = @bitCast(type_name_token);
             },
             else => {},
         }
@@ -1406,7 +1412,7 @@ pub const Parser = struct {
         is_pointer: bool = false,
     };
 
-    pub fn parseDeclarator(self: *Self, base_type: NodeIndex, identifier: *?u32) !DeclaratorResult {
+    pub fn parseDeclarator(self: *Self, base_type: NodeIndex, identifier: *?TokenIndex) !DeclaratorResult {
         const ptok = self.peekToken() orelse @panic("ran out of tokens");
         switch (ptok.kind) {
             .star => {
@@ -1433,14 +1439,15 @@ pub const Parser = struct {
         }
     }
 
-    fn parseDirectDeclarator(self: *Self, base_type: NodeIndex, identifier: *?u32) (ParseError || std.mem.Allocator.Error)!DeclaratorResult {
+    fn parseDirectDeclarator(self: *Self, base_type: NodeIndex, identifier: *?TokenIndex) (ParseError || std.mem.Allocator.Error)!DeclaratorResult {
         var ptok = self.peekToken() orelse @panic("ran out of tokens");
         var left = DeclaratorResult{};
 
         switch (ptok.kind) {
             .identifier => {
+                const tidx = self.peekTokenIndex();
                 _ = self.nextToken();
-                identifier.* = ptok.start;
+                identifier.* = tidx;
                 left = .{ .node = base_type };
             },
             .open_paren => {
@@ -1600,7 +1607,7 @@ pub const Parser = struct {
             }
 
             var storage_class: StorageClass.Type = 0;
-            var identifier: ?u32 = null;
+            var identifier: ?TokenIndex = null;
             const type_node = try self.parseDeclarationSpecifiers(&storage_class);
 
             const full_type = try self.parseDeclarator(type_node, &identifier);
@@ -1610,7 +1617,7 @@ pub const Parser = struct {
             node_data.as(.eight).c = storage_class;
 
             if (identifier) |ident| {
-                node_data.as(.two).b = ident;
+                node_data.as(.two).b = @bitCast(ident);
                 try these_nodes.append(try self.createNode(Node{
                     .kind = .parameter_ident,
                     .data = node_data,
@@ -1748,11 +1755,11 @@ pub const Parser = struct {
                     }));
                 },
                 else => {
-                    var identifier: ?u32 = null;
+                    var identifier: ?TokenIndex = null;
                     const declarator = try self.parseDeclarator(member_type, &identifier);
 
                     var node_data: NodeData = undefined;
-                    if (identifier) |i| node_data.as(.two).a = i;
+                    if (identifier) |i| node_data.as(.two).a = @bitCast(i);
 
                     const ntok = self.peekToken();
                     if (ntok != null and ntok.?.kind == .colon) {
@@ -2664,7 +2671,8 @@ pub const Parser = struct {
     }
 
     pub fn parsePrimaryExpression(self: *Self) !NodeIndex {
-        var ptok = self.peekToken() orelse @panic("EOF");
+        const ptok = self.peekToken() orelse @panic("EOF");
+        const tidx = self.peekTokenIndex();
 
         const node = switch (ptok.kind) {
             .open_paren => {
@@ -2676,14 +2684,28 @@ pub const Parser = struct {
             .int_literal => Node{
                 .kind = .int_literal,
                 .data = .{
-                    .long = ptok.ivalue(self.unit),
+                    .long = self.unit.ivalue(tidx),
                 },
             },
             .float_literal => Node{
                 .kind = .float_literal,
                 .data = .{
-                    .double = ptok.fvalue(self.unit),
+                    .double = self.unit.fvalue(tidx),
                 },
+            },
+            .string_literal => Node{
+                .kind = .string_literal,
+                .data = .{
+                    .two = .{ .a = @bitCast(tidx), .b = 0 },
+                },
+            },
+            .char_literal => blk: {
+                var node_data: NodeData = undefined;
+                node_data.as(.eight).a = self.unit.charAt(tidx);
+                break :blk Node{
+                    .kind = .char_literal,
+                    .data = node_data,
+                };
             },
             .identifier => {
                 _ = self.nextToken();
@@ -2694,7 +2716,7 @@ pub const Parser = struct {
                     return try self.createNode(Node{
                         .kind = .label,
                         .data = .{
-                            .two = .{ .a = ptok.start, .b = stmt },
+                            .two = .{ .a = @bitCast(tidx), .b = stmt },
                         },
                     });
                 }
@@ -2702,7 +2724,7 @@ pub const Parser = struct {
                 return self.createNode(Node{
                     .kind = .identifier,
                     .data = .{
-                        .two = .{ .a = ptok.start, .b = 0 },
+                        .two = .{ .a = @bitCast(tidx), .b = 0 },
                     },
                 });
             },
@@ -2713,47 +2735,66 @@ pub const Parser = struct {
     }
 
     fn nextToken(self: *Self) ?tok.Token {
-        if (self.virtual_token_next < self.virtual_tokens.items.len) {
-            const token = self.virtual_tokens.items[self.virtual_token_next];
-            self.virtual_token_next += 1;
-            return token;
+        if (self.unit.virtual_token_next < self.unit.virtual_tokens.items.len) {
+            const tidx = self.unit.virtual_tokens.items[self.unit.virtual_token_next];
+            self.unit.virtual_token_next += 1;
+            return self.unit.token(tidx);
         }
         const index = self.tokenizer.next();
         if (index == null) return null;
 
-        return self.unit.tokens.items[index.?];
+        return self.unit.token(index.?);
     }
 
     fn peekToken(self: *Self) ?tok.Token {
         if (!self.in_handle_pp) {
             self.handlePP() catch @panic("OOM");
         }
-        if (self.virtual_token_next < self.virtual_tokens.items.len) {
-            const token = self.virtual_tokens.items[self.virtual_token_next];
-            return token;
+        if (self.unit.virtual_token_next < self.unit.virtual_tokens.items.len) {
+            const tidx = self.unit.virtual_tokens.items[self.unit.virtual_token_next];
+            return self.unit.token(tidx);
         }
         const index = self.tokenizer.peek();
         if (index == null) return null;
 
-        return self.unit.tokens.items[index.?];
+        return self.unit.token(index.?);
+    }
+
+    fn peekTokenIndex(self: *Self) tok.TokenIndex {
+        if (self.unit.virtual_token_next < self.unit.virtual_tokens.items.len) {
+            const token_index = self.unit.virtual_tokens.items[self.unit.virtual_token_next];
+            return token_index;
+        }
+        const index = self.tokenizer.peek();
+        return index.?;
     }
 
     inline fn hasNext(self: *Self) bool {
-        return self.virtual_token_next < self.virtual_tokens.items.len or self.tokenizer.peek() != null;
+        return self.unit.virtual_token_next < self.unit.virtual_tokens.items.len or self.tokenizer.peek() != null;
     }
 
     fn rawPeekToken(self: *Self) ?tok.Token {
         const index = self.tokenizer.peek();
         if (index == null) return null;
 
-        return self.unit.tokens.items[index.?];
+        return self.unit.token(index.?);
+    }
+
+    fn rawPeekTokenIndex(self: *Self) tok.TokenIndex {
+        const index = self.tokenizer.peek();
+        return index.?;
     }
 
     fn rawPeekTokenEOL(self: *Self) ?tok.Token {
         const index = self.tokenizer.peekEOL();
         if (index == null) return null;
 
-        return self.unit.tokens.items[index.?];
+        return self.unit.token(index.?);
+    }
+
+    fn rawPeekTokenEOLIndex(self: *Self) tok.TokenIndex {
+        const index = self.tokenizer.peekEOL();
+        return index.?;
     }
 
     fn expect(self: *Self, kind: tok.TokenKind) !tok.Token {
@@ -2769,11 +2810,25 @@ pub const Parser = struct {
         }
     }
 
+    fn expectIndex(self: *Self, kind: tok.TokenKind) !tok.TokenIndex {
+        const token = self.peekToken();
+        const tidx = self.peekTokenIndex();
+        if (token == null) return error.OutOfTokens;
+
+        if (token.?.kind == kind) {
+            _ = self.nextToken();
+            return tidx;
+        } else {
+            std.log.err("Found {}", .{token.?.kind});
+            return error.UnexpectedToken;
+        }
+    }
+
     fn rawExpect(self: *Self, kind: tok.TokenKind) !tok.Token {
         const index = self.tokenizer.peek();
         if (index == null) return error.OutOfTokens;
 
-        const token = self.unit.tokens.items[index.?];
+        const token = self.unit.tokens[0].items[index.?];
         if (token.kind == kind) {
             _ = self.tokenizer.next();
             return token;
@@ -2786,10 +2841,23 @@ pub const Parser = struct {
         const index = self.tokenizer.peekEOL();
         if (index == null) return error.OutOfTokens;
 
-        const token = self.unit.tokens.items[index.?];
+        const token = self.unit.token(index.?);
         if (token.kind == kind) {
             _ = self.tokenizer.nextEOL();
             return token;
+        } else {
+            return error.UnexpectedToken;
+        }
+    }
+
+    fn rawExpectEOLIndex(self: *Self, kind: tok.TokenKind) !tok.TokenIndex {
+        const index = self.tokenizer.peekEOL();
+        if (index == null) return error.OutOfTokens;
+
+        const token = self.unit.token(index.?);
+        if (token.kind == kind) {
+            _ = self.tokenizer.nextEOL();
+            return index.?;
         } else {
             return error.UnexpectedToken;
         }
@@ -2801,13 +2869,14 @@ pub const Parser = struct {
         defer self.in_handle_pp = old_handle_pp;
 
         var token = self.peekToken() orelse return;
+        var tidx = self.peekTokenIndex();
         switch (token.kind) {
             .pp_directive => {
-                _ = self.tokenizer.nextEOL();
-
-                const directive = token.ppDirective(self.unit);
+                _ = self.nextToken();
+                const directive = self.unit.ppDirective(tidx);
                 if (std.mem.eql(u8, directive, "define")) {
-                    const ident = try self.rawExpectEOL(.identifier);
+                    const ident_idx = try self.rawExpectEOLIndex(.identifier);
+
                     var ptok = self.rawPeekTokenEOL();
                     if (ptok != null and ptok.?.kind == .open_paren) {
                         _ = self.tokenizer.next();
@@ -2817,8 +2886,9 @@ pub const Parser = struct {
                         ptok = self.rawPeekTokenEOL();
                         blk: {
                             while (ptok) |p| : (ptok = self.rawPeekTokenEOL()) {
+                                tidx = self.rawPeekTokenEOLIndex();
                                 switch (p.kind) {
-                                    .identifier => try parameter_map.put(p.identifier(self.unit), {}),
+                                    .identifier => try parameter_map.put(self.unit.identifier(tidx), {}),
                                     .close_paren => {
                                         _ = self.tokenizer.nextEOL();
                                         break;
@@ -2848,8 +2918,11 @@ pub const Parser = struct {
                             count += 1;
                         }
 
-                        try self.unit.define_fns.put(ident.identifier(self.unit), .{
-                            .token_start = @truncate(start),
+                        try self.unit.define_fns.put(self.unit.identifier(ident_idx), .{
+                            .token_start = .{
+                                .index = @truncate(start),
+                                .file_index = 0,
+                            },
                             .token_count = count,
                             .parameters = parameter_map,
                         });
@@ -2862,40 +2935,67 @@ pub const Parser = struct {
                         }
                         std.log.info("Define start is {} {}", .{ start, count });
 
-                        try self.unit.defines.put(ident.identifier(self.unit), .{
-                            .token_start = @truncate(start),
+                        try self.unit.defines.put(self.unit.identifier(ident_idx), .{
+                            .token_start = .{
+                                .index = @truncate(start),
+                                .file_index = 0,
+                            },
                             .token_count = count,
                         });
+                    }
+                } else if (std.mem.eql(u8, directive, "include")) {
+                    const ptok = self.rawPeekTokenEOL();
+                    if (ptok != null and ptok.?.kind == .string_literal) {
+                        tidx = self.peekTokenIndex();
+                        _ = self.tokenizer.nextEOL();
+                        const file_path = self.unit.stringAt(tidx);
+                        const this_file_dir_path = std.fs.path.dirname(self.unit.files.items[0].file_path).?;
+                        const full_file_path = try std.fs.path.resolve(self.allocator, &.{
+                            this_file_dir_path, file_path,
+                        });
+
+                        std.log.info("file is {s} {s}", .{ full_file_path, file_path });
+                        var file = std.fs.openFileAbsolute(full_file_path, .{}) catch @panic("dang");
+                        const file_contents = file.readToEndAlloc(self.allocator, std.math.maxInt(usize)) catch |e| std.debug.panic("foo {}", .{e});
+                        defer self.allocator.free(file_contents);
+
+                        var file_tokenizer = Tokenizer.initVirtual(self.allocator, self.unit, @truncate(self.unit.files.items.len));
+                        while (file_tokenizer.next()) |pt| {
+                            std.log.debug("Token: {}", .{pt});
+                        }
+                    } else {
+                        @panic("todo");
                     }
                 }
             },
             .identifier => {
-                try self.handlePPIdentifier(&token);
+                try self.handlePPIdentifier(tidx);
             },
             else => {},
         }
 
         token = self.peekToken() orelse return;
+        tidx = self.peekTokenIndex();
         switch (token.kind) {
             .identifier => {
-                try self.handlePPIdentifier(&token);
+                try self.handlePPIdentifier(tidx);
             },
             else => return,
         }
     }
 
-    fn handlePPIdentifier(self: *Self, token: *const tok.Token) !void {
-        const ident_str = token.identifier(self.unit);
+    fn handlePPIdentifier(self: *Self, tidx: tok.TokenIndex) !void {
+        const ident_str = self.unit.identifier(tidx);
 
         if (self.unit.defines.get(ident_str)) |value| {
             _ = self.nextToken();
 
-            const token_slice = self.unit.tokens.items[value.token_start .. value.token_start + value.token_count];
-            if (self.virtual_tokens.items.len == 0 or (self.virtual_token_next >= self.virtual_tokens.items.len)) {
-                self.virtual_tokens.items.len = 0;
-                self.virtual_token_next = 0;
+            const token_slice = self.unit.tokenSliceCount(value.token_start, value.token_count);
+            if (self.unit.virtual_tokens.items.len == 0 or (self.unit.virtual_token_next >= self.unit.virtual_tokens.items.len)) {
+                self.unit.virtual_tokens.items.len = 0;
+                self.unit.virtual_token_next = 0;
             }
-            try self.virtual_tokens.insertSlice(self.virtual_token_next, token_slice);
+            try self.unit.virtual_tokens.insertSlice(self.unit.virtual_token_next, token_slice);
 
             try self.handlePP();
         } else if (self.unit.define_fns.get(ident_str)) |fn_value| {
@@ -2949,22 +3049,22 @@ pub const Parser = struct {
 
             self.expansion_argument_map = argument_map;
 
-            const token_slice = self.unit.tokens.items[fn_value.token_start .. fn_value.token_start + fn_value.token_count];
-            if (self.virtual_tokens.items.len == 0 or (self.virtual_token_next >= self.virtual_tokens.items.len)) {
-                self.virtual_tokens.items.len = 0;
-                self.virtual_token_next = 0;
+            const token_slice = self.unit.tokens[0].items[fn_value.token_start .. fn_value.token_start + fn_value.token_count];
+            if (self.unit.virtual_tokens.items.len == 0 or (self.unit.virtual_token_next >= self.unit.virtual_tokens.items.len)) {
+                self.unit.virtual_tokens.items.len = 0;
+                self.unit.virtual_token_next = 0;
             }
-            try self.virtual_tokens.insertSlice(self.virtual_token_next, token_slice);
+            try self.unit.virtual_tokens.insertSlice(self.unit.virtual_token_next, token_slice);
 
             try self.handlePP();
         } else if (self.expansion_argument_map.get(ident_str)) |value| {
             _ = self.nextToken();
-            const token_slice = self.unit.tokens.items[value.token_start .. value.token_start + value.token_count];
-            if (self.virtual_tokens.items.len == 0 or (self.virtual_token_next >= self.virtual_tokens.items.len)) {
-                self.virtual_tokens.items.len = 0;
-                self.virtual_token_next = 0;
+            const token_slice = self.unit.tokens[0].items[value.token_start .. value.token_start + value.token_count];
+            if (self.unit.virtual_tokens.items.len == 0 or (self.unit.virtual_token_next >= self.unit.virtual_tokens.items.len)) {
+                self.unit.virtual_tokens.items.len = 0;
+                self.unit.virtual_token_next = 0;
             }
-            try self.virtual_tokens.insertSlice(self.virtual_token_next, token_slice);
+            try self.unit.virtual_tokens.insertSlice(self.unit.virtual_token_next, token_slice);
 
             try self.handlePP();
         }

@@ -6,10 +6,19 @@ const Node = @import("parser.zig").Node;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const file_path = "test/main.cp";
     const source = try std.fs.cwd().readFileAlloc(gpa.allocator(), "test/main.cp", std.math.maxInt(usize));
 
-    var unit = Unit.init(gpa.allocator(), source);
-    var tokenizer = Tokenizer.init(gpa.allocator(), &unit);
+    const full_path = try std.fs.realpathAlloc(gpa.allocator(), ".");
+    const absolute_path = try std.fs.path.resolve(gpa.allocator(), &.{
+        full_path,
+        file_path,
+    });
+    defer gpa.allocator().free(absolute_path);
+    std.log.info("CWD: {s}", .{absolute_path});
+
+    var unit = Unit.init(gpa.allocator(), absolute_path, source);
+    var tokenizer = Tokenizer.init(gpa.allocator(), &unit, 0);
 
     var parser = Parser.init(&unit, &tokenizer);
     const unit_range = try parser.parseUnit();

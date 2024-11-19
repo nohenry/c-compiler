@@ -227,110 +227,113 @@ pub const keyword_map = std.StaticStringMap(TokenKind).initComptime(&.{
     .{ "bool", .bool },
 });
 
-pub const TokenIndex = u32;
+pub const TokenIndexType = u20;
+pub const FileIndexType = u12;
+pub const TokenIndex = packed struct(u32) {
+    index: TokenIndexType,
+    file_index: FileIndexType,
+};
+
+pub const TokenRange = struct {
+    index: TokenIndex,
+    count: u32,
+};
+
 pub const Token = struct {
     kind: TokenKind,
     start: u32,
 
-    pub fn ivalue(self: *const Token, unit: *const Unit) u64 {
-        var index = self.start;
-        var sum: u64 = 0;
-        while (index < unit.source.len) : (index += 1) {
-            switch (unit.source[index]) {
-                '0'...'9' => |c| {
-                    sum *= 10;
-                    sum += @as(u64, c - '0');
-                },
-                else => break,
-            }
-        }
+    // pub fn ivalue(self: *const Token, unit: *const Unit) u64 {
+    //     var index = self.start;
+    //     var sum: u64 = 0;
+    //     while (index < unit.source.len) : (index += 1) {
+    //         switch (unit.source[index]) {
+    //             '0'...'9' => |c| {
+    //                 sum *= 10;
+    //                 sum += @as(u64, c - '0');
+    //             },
+    //             else => break,
+    //         }
+    //     }
 
-        return sum;
-    }
+    //     return sum;
+    // }
 
-    pub fn fvalue(self: *const Token, unit: *const Unit) f64 {
-        var index = self.start;
-        var sum: f64 = 0.0;
-        var fract: f64 = 0.0;
-        var mult: f64 = 0.0;
-        var didDot = false;
-        var didE = false;
-        while (index < unit.source.len) : (index += 1) {
-            switch (unit.source[index]) {
-                '0'...'9' => |c| {
-                    if (didDot) {
-                        fract /= 10.0;
-                        fract += (@as(f64, @floatFromInt(c - '0')) / 10.0);
-                    } else if (didE) {
-                        mult *= 10.0;
-                        mult += @as(f64, @floatFromInt(c - '0'));
-                    } else {
-                        sum *= 10.0;
-                        sum += @as(f64, @floatFromInt(c - '0'));
-                    }
-                },
-                'e' => didE = true,
-                '.' => didDot = true,
-                else => break,
-            }
-        }
+    // pub fn fvalue(self: *const Token, unit: *const Unit) f64 {
+    //     var index = self.start;
+    //     var sum: f64 = 0.0;
+    //     var fract: f64 = 0.0;
+    //     var mult: f64 = 0.0;
+    //     var didDot = false;
+    //     var didE = false;
+    //     while (index < unit.source.len) : (index += 1) {
+    //         switch (unit.source[index]) {
+    //             '0'...'9' => |c| {
+    //                 if (didDot) {
+    //                     fract /= 10.0;
+    //                     fract += (@as(f64, @floatFromInt(c - '0')) / 10.0);
+    //                 } else if (didE) {
+    //                     mult *= 10.0;
+    //                     mult += @as(f64, @floatFromInt(c - '0'));
+    //                 } else {
+    //                     sum *= 10.0;
+    //                     sum += @as(f64, @floatFromInt(c - '0'));
+    //                 }
+    //             },
+    //             'e' => didE = true,
+    //             '.' => didDot = true,
+    //             else => break,
+    //         }
+    //     }
 
-        if (didE)
-            return (sum + fract) * std.math.pow(f64, 10.0, mult)
-        else
-            return (sum + fract);
-    }
+    //     if (didE)
+    //         return (sum + fract) * std.math.pow(f64, 10.0, mult)
+    //     else
+    //         return (sum + fract);
+    // }
 
-    pub fn identifier(self: *const Token, unit: *const Unit) []const u8 {
-        var index = self.start;
-        while (index < unit.source.len) : (index += 1) {
-            switch (unit.source[index]) {
-                'a'...'z', 'A'...'Z', '_' => continue,
-                else => break,
-            }
-        }
-
-        return unit.source[self.start..index];
-    }
-
-    pub fn ppDirective(self: *const Token, unit: *const Unit) []const u8 {
-        var index = self.start + 1;
-        while (index < unit.source.len) : (index += 1) {
-            switch (unit.source[index]) {
-                'a'...'z', 'A'...'Z', '_' => continue,
-                else => break,
-            }
-        }
-
-        return unit.source[self.start + 1 .. index];
-    }
 };
 
 pub const Tokenizer = struct {
     allocator: std.mem.Allocator,
     unit: *Unit,
     pos: u32 = 0,
+    token_index: u8 = 0,
+    source: []const u8,
+    file_index: FileIndexType,
 
     peeked_token: ?TokenIndex = null,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, unit: *Unit) Self {
+    pub fn init(allocator: std.mem.Allocator, unit: *Unit, file_index: FileIndexType) Self {
         return .{
             .allocator = allocator,
             .unit = unit,
+            .source = unit.files.items[file_index].source,
+            .file_index = file_index,
+        };
+    }
+
+    pub fn initVirtual(allocator: std.mem.Allocator, unit: *Unit, file_index: FileIndexType) Self {
+        return .{
+            .allocator = allocator,
+            .unit = unit,
+            .source = unit.files.items[file_index].source,
+            .token_index = 1,
+            .file_index = file_index,
         };
     }
 
     inline fn isNot(self: *Self, offsetFromPos: u32, char: u8) bool {
-        return (self.pos + offsetFromPos < self.unit.source.len) and self.unit.source[self.pos + offsetFromPos] != char;
+        return (self.pos + offsetFromPos < self.source.len) and self.source[self.pos + offsetFromPos] != char;
     }
 
     pub inline fn tokenCount(self: *Self) u32 {
         return if (self.peeked_token == null)
-            @truncate(self.unit.tokens.items.len)
+            @truncate(self.unit.tokens(self.file_index).items.len)
         else
-            @truncate(self.unit.tokens.items.len - 1);
+            @truncate(self.unit.tokens(self.file_index).items.len - 1);
     }
 
     pub fn peek(self: *Self) ?TokenIndex {
@@ -358,16 +361,16 @@ pub const Tokenizer = struct {
         }
 
         var c: u8 = undefined;
-        while (self.pos < self.unit.source.len) : (self.pos += 1) {
-            c = self.unit.source[self.pos];
+        while (self.pos < self.source.len) : (self.pos += 1) {
+            c = self.source[self.pos];
             switch (c) {
                 ' ', '\t', '\r' => continue,
                 '\n' => return null,
                 '/' => {
-                    if (self.pos + 1 < self.unit.source.len) {
-                        if (self.unit.source[self.pos + 1] == '/') {
+                    if (self.pos + 1 < self.source.len) {
+                        if (self.source[self.pos + 1] == '/') {
                             while (self.isNot(0, '\n')) : (self.pos += 1) {}
-                        } else if (self.unit.source[self.pos + 1] == '*') {
+                        } else if (self.source[self.pos + 1] == '*') {
                             while (self.isNot(0, '\n') or self.isNot(0, '*') or self.isNot(1, '/')) : (self.pos += 1) {}
                             self.pos += 2; // for */
                         } else {
@@ -391,16 +394,16 @@ pub const Tokenizer = struct {
         }
 
         var c: u8 = undefined;
-        while (self.pos < self.unit.source.len) : (self.pos += 1) {
-            c = self.unit.source[self.pos];
+        while (self.pos < self.source.len) : (self.pos += 1) {
+            c = self.source[self.pos];
             switch (c) {
                 ' ', '\t', '\n', '\r' => continue,
                 '/' => {
-                    if (self.pos + 1 < self.unit.source.len) {
-                        if (self.unit.source[self.pos + 1] == '/') {
+                    if (self.pos + 1 < self.source.len) {
+                        if (self.source[self.pos + 1] == '/') {
                             while (self.isNot(0, '\n')) : (self.pos += 1) {}
                             self.pos += 1; // for newline
-                        } else if (self.unit.source[self.pos + 1] == '*') {
+                        } else if (self.source[self.pos + 1] == '*') {
                             while (self.isNot(0, '*') or self.isNot(1, '/')) : (self.pos += 1) {}
                             self.pos += 2; // for */
                         } else {
@@ -425,8 +428,8 @@ pub const Tokenizer = struct {
                     var isFloat = false;
                     var didDot = false;
                     var didE = false;
-                    while (self.pos < self.unit.source.len) : (self.pos += 1) doneLit: {
-                        switch (self.unit.source[self.pos]) {
+                    while (self.pos < self.source.len) : (self.pos += 1) doneLit: {
+                        switch (self.source[self.pos]) {
                             '.' => {
                                 if (didDot) break :doneLit;
 
@@ -450,13 +453,13 @@ pub const Tokenizer = struct {
                         break :blk TokenKind.int_literal;
                 },
                 'a'...'z', 'A'...'Z', '_' => {
-                    while (self.pos < self.unit.source.len) : (self.pos += 1) {
-                        switch (self.unit.source[self.pos]) {
+                    while (self.pos < self.source.len) : (self.pos += 1) {
+                        switch (self.source[self.pos]) {
                             'a'...'z', 'A'...'Z', '_' => continue,
                             else => break,
                         }
                     }
-                    const str = self.unit.source[start..self.pos];
+                    const str = self.source[start..self.pos];
 
                     if (self.unit.type_names.contains(str)) {
                         break :blk TokenKind.type_name;
@@ -465,6 +468,8 @@ pub const Tokenizer = struct {
                     if (keyword_map.get(str)) |kind| {
                         break :blk kind;
                     }
+
+                    // const index = self.unit.getOrPut(str);
 
                     break :blk TokenKind.identifier;
                 },
@@ -478,16 +483,16 @@ pub const Tokenizer = struct {
                 ';' => break :blk self.advanceToken(TokenKind.semicolon),
                 ':' => break :blk self.advanceToken(TokenKind.colon),
                 '.' => {
-                    if (self.pos + 2 < self.unit.source.len) {
-                        if (self.unit.source[self.pos + 1] == '.' and self.unit.source[self.pos + 2] == '.') {
+                    if (self.pos + 2 < self.source.len) {
+                        if (self.source[self.pos + 1] == '.' and self.source[self.pos + 2] == '.') {
                             break :blk self.advanceToken(TokenKind.ellipsis);
                         }
                     }
                     break :blk self.advanceToken(TokenKind.dot);
                 },
                 '=' => {
-                    if (self.pos + 1 < self.unit.source.len) {
-                        switch (self.unit.source[self.pos + 1]) {
+                    if (self.pos + 1 < self.source.len) {
+                        switch (self.source[self.pos + 1]) {
                             '=' => break :blk self.advanceToken(TokenKind.equality),
                             else => {},
                         }
@@ -495,8 +500,8 @@ pub const Tokenizer = struct {
                     break :blk self.advanceToken(TokenKind.assignment);
                 },
                 '!' => {
-                    if (self.pos + 1 < self.unit.source.len) {
-                        switch (self.unit.source[self.pos + 1]) {
+                    if (self.pos + 1 < self.source.len) {
+                        switch (self.source[self.pos + 1]) {
                             '=' => break :blk self.advanceToken(TokenKind.nequality),
                             else => {},
                         }
@@ -504,15 +509,15 @@ pub const Tokenizer = struct {
                     break :blk self.advanceToken(TokenKind.exclamation);
                 },
 
-                '+' => if (self.pos + 1 < self.unit.source.len) {
-                    switch (self.unit.source[self.pos + 1]) {
+                '+' => if (self.pos + 1 < self.source.len) {
+                    switch (self.source[self.pos + 1]) {
                         '+' => break :blk self.advanceToken(TokenKind.plusplus),
                         '=' => break :blk self.advanceToken(TokenKind.plus_eq),
                         else => break :blk self.advanceToken(TokenKind.plus),
                     }
                 } else break :blk self.advanceToken(TokenKind.plus),
-                '-' => if (self.pos + 1 < self.unit.source.len) {
-                    switch (self.unit.source[self.pos + 1]) {
+                '-' => if (self.pos + 1 < self.source.len) {
+                    switch (self.source[self.pos + 1]) {
                         '-' => break :blk self.advanceToken(TokenKind.minusminus),
                         '=' => break :blk self.advanceToken(TokenKind.minus_eq),
                         '>' => break :blk self.advanceToken(TokenKind.arrow),
@@ -524,8 +529,8 @@ pub const Tokenizer = struct {
                 '%' => break :blk self.opEq(.percent, .percent_eq),
 
                 '&' => {
-                    if (self.pos + 1 < self.unit.source.len) {
-                        switch (self.unit.source[self.pos + 1]) {
+                    if (self.pos + 1 < self.source.len) {
+                        switch (self.source[self.pos + 1]) {
                             '&' => break :blk self.advanceToken(TokenKind.double_ampersand),
                             '=' => break :blk self.advanceToken(TokenKind.ampersand_eq),
                             else => {},
@@ -534,8 +539,8 @@ pub const Tokenizer = struct {
                     break :blk self.advanceToken(TokenKind.ampersand);
                 },
                 '|' => {
-                    if (self.pos + 1 < self.unit.source.len) {
-                        switch (self.unit.source[self.pos + 1]) {
+                    if (self.pos + 1 < self.source.len) {
+                        switch (self.source[self.pos + 1]) {
                             '|' => break :blk self.advanceToken(TokenKind.double_pipe),
                             '=' => break :blk self.advanceToken(TokenKind.pipe_eq),
                             else => {},
@@ -547,11 +552,11 @@ pub const Tokenizer = struct {
                 '^' => break :blk self.opEq(.carot, .carot_eq),
                 '~' => break :blk self.advanceToken(.tilde),
                 '<' => {
-                    if (self.pos + 1 < self.unit.source.len) {
-                        switch (self.unit.source[self.pos + 1]) {
+                    if (self.pos + 1 < self.source.len) {
+                        switch (self.source[self.pos + 1]) {
                             '<' => {
-                                if (self.pos + 2 < self.unit.source.len) {
-                                    switch (self.unit.source[self.pos + 2]) {
+                                if (self.pos + 2 < self.source.len) {
+                                    switch (self.source[self.pos + 2]) {
                                         '=' => break :blk self.advanceToken(TokenKind.left_shift_eq),
                                         else => {},
                                     }
@@ -565,12 +570,34 @@ pub const Tokenizer = struct {
                     }
                     break :blk self.advanceToken(.lt);
                 },
+                '"' => {
+                    self.pos += 1;
+                    while (self.pos < self.source.len) : (self.pos += 1) {
+                        switch (self.source[self.pos]) {
+                            '"' => break,
+                            else => {},
+                        }
+                    }
+                    self.pos += 1;
+                    break :blk TokenKind.string_literal;
+                },
+                '\'' => {
+                    self.pos += 1;
+                    while (self.pos < self.source.len) : (self.pos += 1) {
+                        switch (self.source[self.pos]) {
+                            '\'' => break,
+                            else => {},
+                        }
+                    }
+                    self.pos += 1;
+                    break :blk TokenKind.char_literal;
+                },
                 '>' => {
-                    if (self.pos + 1 < self.unit.source.len) {
-                        switch (self.unit.source[self.pos + 1]) {
+                    if (self.pos + 1 < self.source.len) {
+                        switch (self.source[self.pos + 1]) {
                             '>' => {
-                                if (self.pos + 2 < self.unit.source.len) {
-                                    switch (self.unit.source[self.pos + 2]) {
+                                if (self.pos + 2 < self.source.len) {
+                                    switch (self.source[self.pos + 2]) {
                                         '=' => break :blk self.advanceToken(TokenKind.right_shift_eq),
                                         else => {},
                                     }
@@ -587,8 +614,8 @@ pub const Tokenizer = struct {
 
                 '#' => {
                     self.pos += 1;
-                    while (self.pos < self.unit.source.len) : (self.pos += 1) {
-                        switch (self.unit.source[self.pos]) {
+                    while (self.pos < self.source.len) : (self.pos += 1) {
+                        switch (self.source[self.pos]) {
                             'a'...'z', 'A'...'Z', '_' => continue,
                             else => break,
                         }
@@ -605,14 +632,17 @@ pub const Tokenizer = struct {
             .start = start,
         };
 
-        const index = self.unit.tokens.items.len;
-        self.unit.tokens.append(token) catch @panic("OOM");
+        const index = self.unit.tokens(self.file_index).items.len;
+        self.unit.tokens(self.file_index).append(token) catch @panic("OOM");
 
-        return @intCast(index);
+        return .{
+            .index = @truncate(index),
+            .file_index = self.file_index,
+        };
     }
 
     fn opEq(self: *Self, regular: TokenKind, eq: TokenKind) TokenKind {
-        if (self.pos + 1 < self.unit.source.len and self.unit.source[self.pos + 1] == '=') {
+        if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
             return self.advanceToken(eq);
         }
         return self.advanceToken(regular);
