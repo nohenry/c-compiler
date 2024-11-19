@@ -10,13 +10,13 @@ const Node = @import("parser.zig").Node;
 const NodeIndex = @import("parser.zig").NodeIndex;
 
 pub const DefineValue = struct {
-    token_start: TokenIndex,
-    token_count: u32,
+    range: TokenRange,
 };
 
+pub const ArgumentMap = std.StringHashMap(DefineValue);
+
 pub const DefineFunction = struct {
-    token_start: TokenIndex,
-    token_count: u32,
+    range: TokenRange,
 
     parameters: std.StringArrayHashMap(void),
 };
@@ -74,8 +74,8 @@ pub const Unit = struct {
     allocator: std.mem.Allocator,
     type_names: std.StringHashMap(void),
     files: std.ArrayList(File),
-    virtual_tokens: std.ArrayList(TokenRange),
-    virtual_token_next: u32 = 0,
+    // virtual_tokens: std.ArrayList(TokenRange),
+    // virtual_token_next: u32 = 0,
 
     nodes: std.ArrayList(Node),
     node_ranges: std.ArrayList(NodeIndex),
@@ -100,7 +100,7 @@ pub const Unit = struct {
             .files = files,
             .type_names = std.StringHashMap(void).init(allocator),
             // .tokens = .{ std.ArrayList(Token).init(allocator), std.ArrayList(Token).init(allocator) },
-            .virtual_tokens = std.ArrayList(TokenIndex).init(allocator),
+            // .virtual_tokens = std.ArrayList(TokenRange).init(allocator),
 
             .nodes = std.ArrayList(Node).init(allocator),
             .node_ranges = std.ArrayList(NodeIndex).init(allocator),
@@ -114,7 +114,7 @@ pub const Unit = struct {
         return &self.files.items[file_index].tokens;
     }
 
-    pub inline fn token(self: *Unit, tidx: TokenIndex) Token {
+    pub inline fn token(self: *const Unit, tidx: TokenIndex) Token {
         return self.files.items[tidx.file_index].tokens.items[tidx.index];
     }
 
@@ -128,8 +128,9 @@ pub const Unit = struct {
     }
 
     pub fn ivalue(self: *const Unit, tidx: TokenIndex) u64 {
+        const tok = self.token(tidx);
         const source = self.files.items[tidx.file_index].source;
-        var index = tidx.index;
+        var index = tok.start;
         var sum: u64 = 0;
         while (index < source.len) : (index += 1) {
             switch (source[index]) {
@@ -145,8 +146,9 @@ pub const Unit = struct {
     }
 
     pub fn fvalue(self: *const Unit, tidx: TokenIndex) f64 {
+        const tok = self.token(tidx);
         const source = self.files.items[tidx.file_index].source;
-        var index = tidx.index;
+        var index = tok.start;
         var sum: f64 = 0.0;
         var fract: f64 = 0.0;
         var mult: f64 = 0.0;
@@ -178,9 +180,10 @@ pub const Unit = struct {
             return (sum + fract);
     }
 
-    pub fn identifierAt(self: *const Self, start: TokenIndex) []const u8 {
-        const source = self.files.items[start.file_index].source;
-        var index = start.index;
+    pub fn identifierAt(self: *const Self, tidx: TokenIndex) []const u8 {
+        const tok = self.token(tidx);
+        const source = self.files.items[tidx.file_index].source;
+        var index = tok.start;
         while (index < source.len) : (index += 1) {
             switch (source[index]) {
                 'a'...'z', 'A'...'Z', '_' => continue,
@@ -188,13 +191,14 @@ pub const Unit = struct {
             }
         }
 
-        return source[start.index..index];
+        return source[tok.start..index];
     }
 
-    pub fn stringAt(self: *const Self, start: TokenIndex) []const u8 {
-        const source = self.files.items[start.file_index].source;
-        std.debug.assert(source[start.index] == '"');
-        var index = start.index + 1;
+    pub fn stringAt(self: *const Self, tidx: TokenIndex) []const u8 {
+        const tok = self.token(tidx);
+        const source = self.files.items[tidx.file_index].source;
+        std.debug.assert(source[tok.start] == '"');
+        var index = tok.start + 1;
         while (index < source.len) : (index += 1) {
             switch (source[index]) {
                 '"' => break,
@@ -202,13 +206,14 @@ pub const Unit = struct {
             }
         }
 
-        return source[start.index + 1 .. index];
+        return source[tok.start + 1 .. index];
     }
 
-    pub fn charAt(self: *const Self, start: TokenIndex) u8 {
-        const source = self.files.items[start.file_index].source;
-        std.debug.assert(source[start.index] == '\'');
-        var index = start.index + 1;
+    pub fn charAt(self: *const Self, tidx: TokenIndex) u8 {
+        const tok = self.token(tidx);
+        const source = self.files.items[tidx.file_index].source;
+        std.debug.assert(source[tok.start] == '\'');
+        var index = tok.start + 1;
         var c: ?u8 = null;
 
         while (index < source.len) : (index += 1) {
@@ -246,8 +251,9 @@ pub const Unit = struct {
     }
 
     pub fn identifier(self: *const Unit, tidx: TokenIndex) []const u8 {
+        const tok = self.token(tidx);
         const source = self.files.items[tidx.file_index].source;
-        var index = tidx.index;
+        var index = tok.start;
         while (index < source.len) : (index += 1) {
             switch (source[index]) {
                 'a'...'z', 'A'...'Z', '_' => continue,
@@ -255,12 +261,13 @@ pub const Unit = struct {
             }
         }
 
-        return source[tidx.index..index];
+        return source[tok.start..index];
     }
 
     pub fn ppDirective(self: *const Unit, tidx: TokenIndex) []const u8 {
+        const tok = self.token(tidx);
         const source = self.files.items[tidx.file_index].source;
-        var index = tidx.index + 1;
+        var index = tok.start + 1;
         while (index < source.len) : (index += 1) {
             switch (source[index]) {
                 'a'...'z', 'A'...'Z', '_' => continue,
@@ -268,7 +275,7 @@ pub const Unit = struct {
             }
         }
 
-        return source[tidx.index + 1 .. index];
+        return source[tok.start + 1 .. index];
     }
 
     //     pub inline fn getOrPut(self: *Self, string: []const u8) !StringInterner.Index {

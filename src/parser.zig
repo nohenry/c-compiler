@@ -586,6 +586,36 @@ pub const Node = extern struct {
                     },
                 };
             },
+            .@"union" => {
+                try writer.print("\x1b[1;35mUnion\x1b[0m", .{});
+                const member_range_start = self.data.as(.two).a;
+                const member_range_count = self.data.as(.two).b;
+
+                result = .{
+                    .node_range = .{
+                        .start = member_range_start,
+                        .count = member_range_count,
+                    },
+                };
+            },
+            .union_forward => {
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
+                try writer.print("\x1b[1;35mUnion\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+            },
+            .union_ident => {
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
+                const member_range_index = absoluteIndex(index, 1);
+                const member_range = unit.nodes.items[member_range_index];
+                try writer.print("\x1b[1;35mUnion\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+                std.debug.assert(member_range.kind == .range);
+
+                result = .{
+                    .node_range = .{
+                        .start = member_range.data.two.a,
+                        .count = member_range.data.two.b,
+                    },
+                };
+            },
             .member => {
                 const type_index = absoluteIndex(index, self.data.as(.four).c);
                 try writer.print("\x1b[1;35mMember\x1b[0m", .{});
@@ -670,7 +700,7 @@ pub const Node = extern struct {
             },
             .parameter_ident => {
                 const type_index = absoluteIndex(index, self.data.as(.four).a);
-                const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
+                const ident_index: TokenIndex = @bitCast(self.data.as(.two).b);
                 const storage_class = self.data.as(.eight).c;
                 try writer.print("\x1b[1;35mParameter\x1b[0m \x1b[1;36m'{s}'\x1b[0m ", .{unit.identifierAt(ident_index)});
                 try StorageClass.write(storage_class, writer);
@@ -1098,7 +1128,6 @@ pub const Parser = struct {
 
     pub fn parseUnit(self: *Self) !NodeRange {
         var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
-        try self.handlePP();
 
         var ptok = self.peekToken();
         while (ptok) |_| : (ptok = self.peekToken()) {
@@ -1116,35 +1145,14 @@ pub const Parser = struct {
     }
 
     pub fn parseExternalDeclaration(self: *Self) !NodeIndex {
-        try self.handlePP();
         return try self.parseDeclaration(true);
-        // const ptok = self.peekToken() orelse return null;
-
-        // const node = switch (ptok.kind) {
-        //     .int_literal => Node{
-        //         .kind = .int_literal,
-        //         .data = .{
-        //             .long = ptok.ivalue(self.unit),
-        //         },
-        //     },
-        //     .float_literal => Node{
-        //         .kind = .float_literal,
-        //         .data = .{
-        //             .double = ptok.fvalue(self.unit),
-        //         },
-        //     },
-        //     else => return null,
-        // };
-        // _ = self.nextToken();
-
-        // return try self.createNode(node);
     }
 
     pub fn parseDeclaration(self: *Self, toplevel: bool) !NodeIndex {
         var storage_class: StorageClass.Type = 0;
 
         var ptok = self.peekToken();
-        if (ptok != null and ptok.?.kind == .static_assert) {
+        if (ptok != null and ptok.?.token.kind == .static_assert) {
             const result = try self.parseStaticAssert();
             _ = try self.expect(.semicolon);
             return result;
@@ -1156,9 +1164,9 @@ pub const Parser = struct {
         var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
         defer these_nodes.deinit();
         while (ptok) |p| : (ptok = self.peekToken()) {
-            switch (p.kind) {
+            switch (p.token.kind) {
                 .semicolon => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     if (these_nodes.items.len == 0) {
                         return type_node;
                     }
@@ -1173,7 +1181,7 @@ pub const Parser = struct {
                         decl_node_data.as(.two).a = @bitCast(this_ident orelse @panic("TODO: expected identifier in variable decl"));
 
                         ptok = self.peekToken();
-                        if (toplevel and these_nodes.items.len == 0 and ptok != null and ptok.?.kind == .open_brace) {
+                        if (toplevel and these_nodes.items.len == 0 and ptok != null and ptok.?.token.kind == .open_brace) {
                             const body = try self.parseCompoundStatement();
                             decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type.node.?));
                             decl_node_data.as(.four).d = @truncate(self.relativeOffset(body));
@@ -1200,8 +1208,8 @@ pub const Parser = struct {
                         decl_node_data.as(.two).a = @bitCast(this_ident orelse @panic("TODO: expected identifier in variable decl"));
 
                         ptok = self.peekToken();
-                        if (ptok != null and ptok.?.kind == .assignment) {
-                            _ = self.nextToken();
+                        if (ptok != null and ptok.?.token.kind == .assignment) {
+                            self.nextToken();
 
                             const decl_init = try self.parseInitializer();
                             decl_node_data.as(.four).d = @truncate(self.relativeOffset(decl_init));
@@ -1222,15 +1230,15 @@ pub const Parser = struct {
 
             ptok = self.peekToken();
             if (ptok == null) continue;
-            switch (ptok.?.kind) {
+            switch (ptok.?.token.kind) {
                 .comma => {
-                    _ = self.nextToken();
+                    self.nextToken();
                 },
                 .semicolon => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     break;
                 },
-                else => std.debug.panic("TODO: unexpected token {}", .{ptok.?.kind}),
+                else => std.debug.panic("TODO: unexpected token {}", .{ptok.?.token.kind}),
             }
         }
 
@@ -1251,22 +1259,18 @@ pub const Parser = struct {
     }
 
     pub fn parseDeclarationSpecifiers(self: *Self, storage_class: *StorageClass.Type) (ParseError || std.mem.Allocator.Error)!NodeIndex {
-        var tidx = self.peekTokenIndex();
         var ptok = self.peekToken();
         var type_qualifier: TypeQualifier.Type = 0;
         var type_kind: ?NodeKind = null;
         var type_name_token: tok.TokenIndex = undefined;
 
-        while (ptok) |p| : ({
-            ptok = self.peekToken();
-            tidx = self.peekTokenIndex();
-        }) {
-            switch (p.kind) {
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.token.kind) {
                 .atomic => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     ptok = self.peekToken();
-                    if (ptok != null and ptok.?.kind == .open_paren) {
-                        _ = self.nextToken();
+                    if (ptok != null and ptok.?.token.kind == .open_paren) {
+                        self.nextToken();
                         type_kind = .atomic_type;
                         type_name_token = try self.expectIndex(.type_name);
                         _ = try self.expect(.close_paren);
@@ -1375,17 +1379,18 @@ pub const Parser = struct {
                     }
                 },
                 .bool => type_kind = .bool_type,
-                .@"struct", .@"union" => return try self.parseStructOrUnion(),
+                .@"struct" => return try self.parseStructOrUnion(true),
+                .@"union" => return try self.parseStructOrUnion(false),
                 .@"enum" => return try self.parseEnum(),
 
                 .type_name => {
                     type_kind = .type_name;
-                    type_name_token = tidx;
+                    type_name_token = ptok.?.index;
                 },
 
                 else => break,
             }
-            _ = self.nextToken();
+            self.nextToken();
         }
 
         var type_node_data: NodeData = undefined;
@@ -1414,9 +1419,9 @@ pub const Parser = struct {
 
     pub fn parseDeclarator(self: *Self, base_type: NodeIndex, identifier: *?TokenIndex) !DeclaratorResult {
         const ptok = self.peekToken() orelse @panic("ran out of tokens");
-        switch (ptok.kind) {
+        switch (ptok.token.kind) {
             .star => {
-                _ = self.nextToken();
+                self.nextToken();
                 const type_qualifier = self.parseAnyTypeQualifiers();
                 const element_type = try self.parseDeclarator(base_type, identifier);
 
@@ -1443,19 +1448,18 @@ pub const Parser = struct {
         var ptok = self.peekToken() orelse @panic("ran out of tokens");
         var left = DeclaratorResult{};
 
-        switch (ptok.kind) {
+        switch (ptok.token.kind) {
             .identifier => {
-                const tidx = self.peekTokenIndex();
-                _ = self.nextToken();
-                identifier.* = tidx;
+                self.nextToken();
+                identifier.* = ptok.index;
                 left = .{ .node = base_type };
             },
             .open_paren => {
-                _ = self.nextToken();
+                self.nextToken();
                 const ntok = self.peekToken();
-                // if (ntok != null and ntok.?.kind != .open_paren and ntok.?.kind != .open_bracket and ntok.?.kind != ) {
+                // if (ntok != null and ntok.?.token.kind != .open_paren and ntok.?.token.kind != .open_bracket and ntok.?.token.kind != ) {
                 // }
-                if (ntok != null and (ntok.?.kind == .star or ntok.?.kind == .identifier)) {
+                if (ntok != null and (ntok.?.token.kind == .star or ntok.?.token.kind == .identifier)) {
                     left = try self.parseDeclarator(base_type, identifier);
                     _ = try self.expect(.close_paren);
                 } else {
@@ -1473,9 +1477,9 @@ pub const Parser = struct {
 
         ptok = self.peekToken() orelse return left;
         while (true) : (ptok = self.peekToken() orelse break) {
-            switch (ptok.kind) {
+            switch (ptok.token.kind) {
                 .open_bracket => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     var type_qualifiers = self.parseAnyTypeQualifiers();
                     ptok = self.peekToken() orelse @panic("unexpecteed EOF");
 
@@ -1483,9 +1487,9 @@ pub const Parser = struct {
                     node_data.as(.two).a = left.node.?;
                     node_data.as(.eight).h = type_qualifiers;
 
-                    switch (ptok.kind) {
+                    switch (ptok.token.kind) {
                         .close_bracket => {
-                            _ = self.nextToken();
+                            self.nextToken();
                             // node_data.as(.two).a = (try self.parseDirectDeclarator(base_type, base_ident, identifier)) orelse base_ident.*.?;
 
                             left.node = try self.createNode(Node{
@@ -1494,7 +1498,7 @@ pub const Parser = struct {
                             });
                         },
                         .star => {
-                            _ = self.nextToken();
+                            self.nextToken();
                             _ = try self.expect(.close_bracket);
                             // node_data.as(.two).a = (try self.parseDirectDeclarator(base_type, base_ident, identifier)) orelse base_ident.*.?;
 
@@ -1504,7 +1508,7 @@ pub const Parser = struct {
                             });
                         },
                         .static => {
-                            _ = self.nextToken();
+                            self.nextToken();
                             type_qualifiers |= self.parseAnyTypeQualifiers();
                             node_data.as(.eight).h = type_qualifiers;
                             const size_expr = try self.parseExpression();
@@ -1534,7 +1538,7 @@ pub const Parser = struct {
                     }
                 },
                 .open_paren => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     left.node = try self.parseParameters(left.node.?);
                     left.is_function = true;
                     left.is_function_ptr = left.is_pointer;
@@ -1585,17 +1589,17 @@ pub const Parser = struct {
 
         var ptok = self.peekToken();
         while (ptok) |p| : (ptok = self.peekToken()) {
-            switch (p.kind) {
+            switch (p.token.kind) {
                 .comma => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     continue;
                 },
                 .close_paren => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     break;
                 },
                 .ellipsis => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     _ = try self.expect(.close_paren);
                     try these_nodes.append(try self.createNode(Node{
                         .kind = .parameter_ellipsis,
@@ -1650,17 +1654,17 @@ pub const Parser = struct {
         return result;
     }
 
-    pub fn parseStructOrUnion(self: *Self) !NodeIndex {
-        const is_struct = self.nextToken().?.kind == .@"struct";
+    pub fn parseStructOrUnion(self: *Self, is_struct: bool) !NodeIndex {
+        self.nextToken();
         const ptok = self.peekToken() orelse @panic("unexpcted eof");
-        const ident = if (ptok.kind == .identifier) blk: {
-            _ = self.nextToken();
-            break :blk ptok.start;
+        const ident = if (ptok.token.kind == .identifier) blk: {
+            self.nextToken();
+            break :blk ptok.index;
         } else null;
 
         const ntok = self.peekToken();
-        if (ntok != null and ntok.?.kind == .open_brace) {
-            _ = self.nextToken();
+        if (ntok != null and ntok.?.token.kind == .open_brace) {
+            self.nextToken();
 
             const members_range = try self.parseStructDeclarations();
             defer {
@@ -1679,14 +1683,14 @@ pub const Parser = struct {
                     .kind = if (is_struct) .struct_ident else .union_ident,
                     .data = .{
                         .two = .{
-                            .a = i,
+                            .a = @bitCast(i),
                             .b = undefined,
                         },
                     },
                 });
             } else {
                 return try self.createNode(Node{
-                    .kind = if (is_struct) .@"struct" else .union_ident,
+                    .kind = if (is_struct) .@"struct" else .@"union",
                     .data = .{
                         .two = .{ .a = members_range.start, .b = members_range.count },
                     },
@@ -1696,7 +1700,7 @@ pub const Parser = struct {
             return try self.createNode(Node{
                 .kind = if (is_struct) .struct_forward else .union_forward,
                 .data = .{
-                    .two = .{ .a = ident.?, .b = undefined },
+                    .two = .{ .a = @bitCast(ident.?), .b = undefined },
                 },
             });
         }
@@ -1709,9 +1713,9 @@ pub const Parser = struct {
 
         var ptok = self.peekToken();
         while (ptok) |p| : (ptok = self.peekToken()) {
-            if (p.kind == .close_brace) {
+            if (p.token.kind == .close_brace) {
                 break;
-            } else if (p.kind == .static_assert) {
+            } else if (p.token.kind == .static_assert) {
                 try these_nodes.append(try self.parseStaticAssert());
                 _ = try self.expect(.semicolon);
                 continue;
@@ -1733,18 +1737,31 @@ pub const Parser = struct {
 
     pub fn parseStructDeclarator(self: *Self, member_type: NodeIndex, nodes: *std.ArrayList(NodeIndex)) !void {
         var ptok = self.peekToken();
+        if (ptok != null and ptok.?.token.kind == .semicolon) {
+            // if there's a semicolon, it means this is an empty field.
+            var node_data: NodeData = undefined;
+
+            node_data.as(.four).c = @truncate(self.relativeOffset(member_type));
+            try nodes.append(try self.createNode(Node{
+                .kind = .member,
+                .data = node_data,
+            }));
+            return;
+        }
+
+        ptok = self.peekToken();
         while (ptok) |p| : (ptok = self.peekToken()) {
-            switch (p.kind) {
+            switch (p.token.kind) {
                 .semicolon => {
                     break;
                 },
                 .comma => {
-                    _ = self.nextToken();
+                    self.nextToken();
                 },
                 .colon => {
                     var node_data: NodeData = undefined;
 
-                    _ = self.nextToken();
+                    self.nextToken();
                     const expr = try self.parseOperatorExpression(30);
                     node_data.as(.four).c = @truncate(self.relativeOffset(member_type));
                     node_data.as(.four).d = @truncate(self.relativeOffset(expr));
@@ -1762,8 +1779,8 @@ pub const Parser = struct {
                     if (identifier) |i| node_data.as(.two).a = @bitCast(i);
 
                     const ntok = self.peekToken();
-                    if (ntok != null and ntok.?.kind == .colon) {
-                        _ = self.nextToken();
+                    if (ntok != null and ntok.?.token.kind == .colon) {
+                        self.nextToken();
                         const expr = try self.parseOperatorExpression(30);
                         node_data.as(.four).c = @truncate(self.relativeOffset(declarator.node.?));
                         node_data.as(.four).d = @truncate(self.relativeOffset(expr));
@@ -1785,16 +1802,16 @@ pub const Parser = struct {
     }
 
     pub fn parseEnum(self: *Self) !NodeIndex {
-        _ = self.nextToken();
+        self.nextToken();
         const ptok = self.peekToken() orelse @panic("unexpcted eof");
-        const ident = if (ptok.kind == .identifier) blk: {
-            _ = self.nextToken();
-            break :blk ptok.start;
+        const ident = if (ptok.token.kind == .identifier) blk: {
+            self.nextToken();
+            break :blk ptok.index;
         } else null;
 
         const ntok = self.peekToken();
-        if (ntok != null and ntok.?.kind == .open_brace) {
-            _ = self.nextToken();
+        if (ntok != null and ntok.?.token.kind == .open_brace) {
+            self.nextToken();
 
             const members = try self.parseEnumMembers();
 
@@ -1812,7 +1829,7 @@ pub const Parser = struct {
                 return try self.createNode(Node{
                     .kind = .enum_ident,
                     .data = .{
-                        .two = .{ .a = i, .b = undefined },
+                        .two = .{ .a = @bitCast(i), .b = undefined },
                     },
                 });
             } else {
@@ -1827,7 +1844,7 @@ pub const Parser = struct {
             return try self.createNode(Node{
                 .kind = .enum_forward,
                 .data = .{
-                    .two = .{ .a = ident.?, .b = undefined },
+                    .two = .{ .a = @bitCast(ident.?), .b = undefined },
                 },
             });
         }
@@ -1837,23 +1854,24 @@ pub const Parser = struct {
         var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
         var ptok = self.peekToken();
         while (ptok) |p| : (ptok = self.peekToken()) {
-            switch (p.kind) {
+            switch (p.token.kind) {
                 .open_brace => {
                     break;
                 },
                 .identifier => {
-                    const ident = self.nextToken().?;
+                    self.nextToken();
+                    const ident_index = ptok.?.index;
 
                     ptok = self.peekToken();
-                    if (ptok != null and ptok.?.kind == .assignment) {
-                        _ = self.nextToken();
+                    if (ptok != null and ptok.?.token.kind == .assignment) {
+                        self.nextToken();
                         const expr = try self.parseOperatorExpression(30);
 
                         try these_nodes.append(try self.createNode(Node{
                             .kind = .enum_member_value,
                             .data = .{
                                 .two = .{
-                                    .a = ident.start,
+                                    .a = @bitCast(ident_index),
                                     .b = expr,
                                 },
                             },
@@ -1863,7 +1881,7 @@ pub const Parser = struct {
                             .kind = .enum_member,
                             .data = .{
                                 .two = .{
-                                    .a = ident.start,
+                                    .a = @bitCast(ident_index),
                                     .b = undefined,
                                 },
                             },
@@ -1871,8 +1889,8 @@ pub const Parser = struct {
                     }
 
                     ptok = self.peekToken();
-                    if (ptok != null and ptok.?.kind == .comma) {
-                        _ = self.nextToken();
+                    if (ptok != null and ptok.?.token.kind == .comma) {
+                        self.nextToken();
                     } else {
                         break;
                     }
@@ -1894,14 +1912,14 @@ pub const Parser = struct {
         var ptok = self.peekToken();
         var result: TypeQualifier.Type = 0;
         while (ptok) |p| : (ptok = self.peekToken()) {
-            switch (p.kind) {
+            switch (p.token.kind) {
                 .@"const" => result |= TypeQualifier.@"const",
                 .@"volatile" => result |= TypeQualifier.@"volatile",
                 .restrict => result |= TypeQualifier.restrict,
                 .atomic => result |= TypeQualifier.atomic,
                 else => break,
             }
-            _ = self.nextToken();
+            self.nextToken();
         }
         return result;
     }
@@ -1930,22 +1948,22 @@ pub const Parser = struct {
 
     pub fn parseInitializer(self: *Self) (ParseError || std.mem.Allocator.Error)!NodeIndex {
         const ptok = self.peekToken() orelse @panic("Unexpected eof");
-        switch (ptok.kind) {
+        switch (ptok.token.kind) {
             .open_brace => return self.parseInitializerList(),
             else => return try self.parseOperatorExpression(20),
         }
     }
 
     pub fn parseInitializerList(self: *Self) !NodeIndex {
-        _ = self.nextToken();
+        self.nextToken();
         var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
         defer these_nodes.deinit();
 
         var ptok = self.peekToken();
         while (ptok) |p| : (ptok = self.peekToken()) {
-            switch (p.kind) {
+            switch (p.token.kind) {
                 .close_brace => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     break;
                 },
                 .dot, .open_bracket => {
@@ -1961,8 +1979,8 @@ pub const Parser = struct {
                     }));
 
                     ptok = self.peekToken();
-                    if (ptok != null and ptok.?.kind == .comma) {
-                        _ = self.nextToken();
+                    if (ptok != null and ptok.?.token.kind == .comma) {
+                        self.nextToken();
                     } else {
                         _ = try self.expect(.close_brace);
                         break;
@@ -2005,40 +2023,46 @@ pub const Parser = struct {
     pub fn parseDesignator(self: *Self) !NodeIndex {
         var ptok = self.peekToken();
         var left: NodeIndex = undefined;
-        switch (ptok.?.kind) {
+        switch (ptok.?.token.kind) {
             .dot => {
-                _ = self.nextToken();
+                self.nextToken();
                 const ident = try self.expect(.identifier);
-                left = try self.createNode(Node{ .kind = .designator_field_terminal, .data = .{
-                    .two = .{ .a = ident.start, .b = undefined },
-                } });
+                left = try self.createNode(Node{
+                    .kind = .designator_field_terminal,
+                    .data = .{
+                        .two = .{ .a = @bitCast(ident.index), .b = undefined },
+                    },
+                });
             },
             .open_bracket => {
-                _ = self.nextToken();
+                self.nextToken();
                 const expr = try self.parseOperatorExpression(30);
                 _ = try self.expect(.close_bracket);
-                left = try self.createNode(Node{ .kind = .designator_index_terminal, .data = .{
-                    .two = .{ .a = expr, .b = undefined },
-                } });
+                left = try self.createNode(Node{
+                    .kind = .designator_index_terminal,
+                    .data = .{
+                        .two = .{ .a = expr, .b = undefined },
+                    },
+                });
             },
-            else => std.debug.panic("Unexpected token, expected . or [ found {}", .{ptok.?.kind}),
+            else => std.debug.panic("Unexpected token, expected . or [ found {}", .{ptok.?.token.kind}),
         }
 
         ptok = self.peekToken();
         while (ptok) |p| : (ptok = self.peekToken()) {
-            switch (p.kind) {
+            switch (p.token.kind) {
                 .dot => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     const ident = try self.expect(.identifier);
                     left = try self.createNode(Node{
                         .kind = .designator_field,
                         .data = .{
-                            .two = .{ .a = ident.start, .b = left },
+                            .two = .{ .a = @bitCast(ident.index), .b = left },
                         },
                     });
                 },
                 .open_bracket => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     const expr = try self.parseOperatorExpression(30);
                     _ = try self.expect(.close_bracket);
                     left = try self.createNode(Node{
@@ -2056,7 +2080,7 @@ pub const Parser = struct {
     }
 
     pub fn parseStaticAssert(self: *Self) !NodeIndex {
-        _ = self.nextToken();
+        self.nextToken();
         _ = try self.expect(.open_paren);
         defer {
             _ = self.expect(.close_paren) catch @panic("failed to expect!!!");
@@ -2064,8 +2088,8 @@ pub const Parser = struct {
         const test_expr = try self.parseOperatorExpression(30);
 
         const ptok = self.peekToken();
-        if (ptok != null and ptok.?.kind == .comma) {
-            _ = self.nextToken();
+        if (ptok != null and ptok.?.token.kind == .comma) {
+            self.nextToken();
             const expr = try self.parsePrimaryExpression();
             return try self.createNode(Node{
                 .kind = .static_assert_str,
@@ -2085,17 +2109,17 @@ pub const Parser = struct {
 
     pub fn parseStatement(self: *Self) !NodeIndex {
         const ptok = self.peekToken() orelse @panic("unexpected eof");
-        return switch (ptok.kind) {
+        return switch (ptok.token.kind) {
             .open_brace => try self.parseCompoundStatement(),
             .@"while" => {
-                _ = self.nextToken();
+                self.nextToken();
                 _ = try self.expect(.open_paren);
                 const condition = try self.parseExpression();
                 _ = try self.expect(.close_paren);
 
                 const ntok = self.peekToken();
-                if (ntok != null and ntok.?.kind == .semicolon) {
-                    _ = self.nextToken();
+                if (ntok != null and ntok.?.token.kind == .semicolon) {
+                    self.nextToken();
                     return try self.createNode(Node{
                         .kind = .while_loop_empty,
                         .data = .{
@@ -2113,7 +2137,7 @@ pub const Parser = struct {
                 });
             },
             .do => {
-                _ = self.nextToken();
+                self.nextToken();
                 const body = try self.parseStatement();
 
                 _ = try self.expect(.open_paren);
@@ -2132,14 +2156,14 @@ pub const Parser = struct {
                 return result;
             },
             .@"for" => {
-                _ = self.nextToken();
+                self.nextToken();
 
                 _ = try self.expect(.open_paren);
 
                 const init_expr = try self.parseDeclOrExprStmt();
 
                 var ntok = self.peekToken();
-                const condition = if (ntok != null and ntok.?.kind == .semicolon)
+                const condition = if (ntok != null and ntok.?.token.kind == .semicolon)
                     try self.createNode(Node{ .kind = .empty_statement, .data = undefined })
                 else
                     try self.parseExpression();
@@ -2147,7 +2171,7 @@ pub const Parser = struct {
                 _ = try self.expect(.semicolon);
 
                 ntok = self.peekToken();
-                const increment = if (ntok != null and ntok.?.kind != .close_paren)
+                const increment = if (ntok != null and ntok.?.token.kind != .close_paren)
                     try self.parseExpression()
                 else
                     null;
@@ -2157,7 +2181,7 @@ pub const Parser = struct {
                 var node_data: NodeData = undefined;
 
                 ntok = self.peekToken();
-                if (ntok != null and ntok.?.kind == .semicolon) {
+                if (ntok != null and ntok.?.token.kind == .semicolon) {
                     node_data.as(.four).a = @truncate(self.relativeOffset(init_expr));
                     node_data.as(.four).b = @truncate(self.relativeOffset(condition));
                     if (increment) |i| {
@@ -2184,7 +2208,7 @@ pub const Parser = struct {
                 });
             },
             .@"if" => {
-                _ = self.nextToken();
+                self.nextToken();
                 _ = try self.expect(.open_paren);
                 const condition = try self.parseExpression();
                 _ = try self.expect(.close_paren);
@@ -2194,8 +2218,8 @@ pub const Parser = struct {
                 node_data.as(.two).a = condition;
 
                 const ntok = self.peekToken();
-                if (ntok != null and ntok.?.kind == .@"else") {
-                    _ = self.nextToken();
+                if (ntok != null and ntok.?.token.kind == .@"else") {
+                    self.nextToken();
                     const else_body = try self.parseStatement();
                     node_data.as(.four).c = @truncate(self.relativeOffset(body));
                     node_data.as(.four).d = @truncate(self.relativeOffset(else_body));
@@ -2213,7 +2237,7 @@ pub const Parser = struct {
                 });
             },
             .@"switch" => {
-                _ = self.nextToken();
+                self.nextToken();
                 _ = try self.expect(.open_paren);
                 const value = try self.parseExpression();
                 _ = try self.expect(.close_paren);
@@ -2228,7 +2252,7 @@ pub const Parser = struct {
                 });
             },
             .case => {
-                _ = self.nextToken();
+                self.nextToken();
                 const value = try self.parseOperatorExpression(30);
                 _ = try self.expect(.colon);
 
@@ -2242,7 +2266,7 @@ pub const Parser = struct {
                 });
             },
             .default => {
-                _ = self.nextToken();
+                self.nextToken();
                 _ = try self.expect(.colon);
 
                 const body = try self.parseStatement();
@@ -2255,19 +2279,19 @@ pub const Parser = struct {
                 });
             },
             .goto => {
-                _ = self.nextToken();
+                self.nextToken();
                 const ident = try self.expect(.identifier);
                 _ = try self.expect(.semicolon);
 
                 return try self.createNode(Node{
                     .kind = .continue_statement,
                     .data = .{
-                        .two = .{ .a = ident.start, .b = undefined },
+                        .two = .{ .a = @bitCast(ident.index), .b = undefined },
                     },
                 });
             },
             .@"continue" => {
-                _ = self.nextToken();
+                self.nextToken();
                 _ = try self.expect(.semicolon);
 
                 return try self.createNode(Node{
@@ -2276,7 +2300,7 @@ pub const Parser = struct {
                 });
             },
             .@"break" => {
-                _ = self.nextToken();
+                self.nextToken();
                 _ = try self.expect(.semicolon);
 
                 return try self.createNode(Node{
@@ -2285,10 +2309,10 @@ pub const Parser = struct {
                 });
             },
             .@"return" => {
-                _ = self.nextToken();
+                self.nextToken();
                 const ntok = self.peekToken();
-                if (ntok != null and ntok.?.kind == .semicolon) {
-                    _ = self.nextToken();
+                if (ntok != null and ntok.?.token.kind == .semicolon) {
+                    self.nextToken();
                     return try self.createNode(Node{
                         .kind = .return_statement,
                         .data = undefined,
@@ -2298,7 +2322,7 @@ pub const Parser = struct {
                 _ = try self.expect(.semicolon);
 
                 return try self.createNode(Node{
-                    .kind = .break_statement,
+                    .kind = .return_statement_value,
                     .data = .{
                         .two = .{
                             .a = expr,
@@ -2308,13 +2332,20 @@ pub const Parser = struct {
                 });
             },
             .semicolon => {
-                _ = self.nextToken();
+                self.nextToken();
                 return try self.createNode(Node{
                     .kind = .empty_statement,
                     .data = undefined,
                 });
             },
-            else => return try self.parseExpression(),
+            else => {
+                const result = try self.parseExpression();
+                const node = self.unit.nodes.items[result];
+                if (node.kind == .label) return result;
+
+                _ = try self.expect(.semicolon);
+                return result;
+            }
         };
     }
 
@@ -2354,7 +2385,7 @@ pub const Parser = struct {
 
     pub fn parseDeclOrExprStmt(self: *Self) (ParseError || std.mem.Allocator.Error)!NodeIndex {
         const ptok = self.peekToken() orelse @panic("Unexpected eof");
-        switch (ptok.kind) {
+        switch (ptok.token.kind) {
             .auto,
             .atomic,
             .@"const",
@@ -2384,7 +2415,7 @@ pub const Parser = struct {
             .bool,
             => return try self.parseDeclaration(false),
             .semicolon => {
-                _ = self.nextToken();
+                self.nextToken();
                 return try self.createNode(Node{
                     .kind = .empty_statement,
                     .data = undefined,
@@ -2399,9 +2430,9 @@ pub const Parser = struct {
     }
 
     pub fn parseCompoundStatement(self: *Self) !NodeIndex {
-        _ = self.nextToken(); // consume {
+        self.nextToken(); // consume {
         var ptok = self.peekToken();
-        if (ptok != null and ptok.?.kind == .close_brace) {
+        if (ptok != null and ptok.?.token.kind == .close_brace) {
             return try self.createNodeAndNext(Node{
                 .kind = .compound_empty,
                 .data = undefined,
@@ -2409,10 +2440,10 @@ pub const Parser = struct {
         }
 
         const first_node = if (ptok != null) blk: {
-            const result = try self.parseBlockItem(&ptok.?);
+            const result = try self.parseBlockItem(&ptok.?.token);
             ptok = self.peekToken();
-            if (ptok != null and ptok.?.kind == .close_brace) {
-                _ = self.nextToken();
+            if (ptok != null and ptok.?.token.kind == .close_brace) {
+                self.nextToken();
                 return try self.createNode(Node{
                     .kind = .compound_one,
                     .data = .{
@@ -2430,12 +2461,12 @@ pub const Parser = struct {
 
         ptok = self.peekToken();
         while (ptok) |p| : (ptok = self.peekToken()) {
-            switch (p.kind) {
+            switch (p.token.kind) {
                 .close_brace => {
-                    _ = self.nextToken();
+                    self.nextToken();
                     break;
                 },
-                else => try these_nodes.append(try self.parseBlockItem(&p)),
+                else => try these_nodes.append(try self.parseBlockItem(&p.token)),
             }
         }
 
@@ -2538,15 +2569,15 @@ pub const Parser = struct {
         var left: NodeIndex = undefined;
         blk: {
             if (op != null) {
-                const unary_prec_right = unaryPrecedenceRight(&op.?);
+                const unary_prec_right = unaryPrecedenceRight(&op.?.token);
 
                 if (unary_prec_right != 0 and unary_prec_right >= last_prec) {
-                    _ = self.nextToken();
+                    self.nextToken();
                     left = try self.parseOperatorExpression(unary_prec_right);
 
                     var unary_data: NodeData = undefined;
                     unary_data.as(.two).a = left;
-                    unary_data.as(.four).c = @truncate(@intFromEnum(op.?.kind));
+                    unary_data.as(.four).c = @truncate(@intFromEnum(op.?.token.kind));
                     left = try self.createNode(Node{
                         .kind = .unary_prefix_operator,
                         .data = unary_data,
@@ -2562,38 +2593,38 @@ pub const Parser = struct {
         while (true) {
             op = self.peekToken();
             if (op == null) break;
-            const prec = binaryPrecedence(&op.?);
-            const prec_right = binaryPrecedence(&op.?);
-            const unary_prec_right = unaryPrecedence(&op.?);
+            const prec = binaryPrecedence(&op.?.token);
+            const prec_right = binaryPrecedence(&op.?.token);
+            const unary_prec_right = unaryPrecedence(&op.?.token);
 
             if ((prec > last_prec and prec != 0) or (prec_right >= last_prec and prec != 0)) {
-                _ = self.nextToken(); // consume operator
+                self.nextToken(); // consume operator
 
                 const right = try self.parseOperatorExpression(prec);
 
                 var bin_op_data: NodeData = undefined;
                 bin_op_data.as(.two).a = left;
                 bin_op_data.as(.four).c = @truncate(self.relativeOffset(right));
-                bin_op_data.as(.four).d = @truncate(@intFromEnum(op.?.kind));
+                bin_op_data.as(.four).d = @truncate(@intFromEnum(op.?.token.kind));
 
                 left = try self.createNode(Node{
                     .kind = .binary_lr_operator,
                     .data = bin_op_data,
                 });
             } else if (unary_prec_right > prec and unary_prec_right != 0) {
-                _ = self.nextToken();
+                self.nextToken();
 
                 var unary_data: NodeData = undefined;
-                switch (op.?.kind) {
+                switch (op.?.token.kind) {
                     .open_paren => {
                         var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
                         defer these_nodes.deinit();
 
                         var ptok = self.peekToken();
                         while (ptok) |p| : (ptok = self.peekToken()) {
-                            switch (p.kind) {
+                            switch (p.token.kind) {
                                 .close_paren => {
-                                    _ = self.nextToken();
+                                    self.nextToken();
                                     break;
                                 },
                                 else => try these_nodes.append(try self.parseOperatorExpression(20)),
@@ -2601,15 +2632,15 @@ pub const Parser = struct {
 
                             ptok = self.peekToken();
                             if (ptok == null) @panic("Unexpected EOF");
-                            switch (ptok.?.kind) {
+                            switch (ptok.?.token.kind) {
                                 .comma => {
-                                    _ = self.nextToken();
+                                    self.nextToken();
                                 },
                                 .close_paren => {
-                                    _ = self.nextToken();
+                                    self.nextToken();
                                     break;
                                 },
-                                else => std.debug.panic("TODO: Expected clsoe paren or comma found {}", .{ptok.?.kind}),
+                                else => std.debug.panic("TODO: Expected clsoe paren or comma found {}", .{ptok.?.token.kind}),
                             }
                         }
 
@@ -2655,7 +2686,7 @@ pub const Parser = struct {
                     },
                     else => {
                         unary_data.as(.two).a = left;
-                        unary_data.as(.four).c = @truncate(@intFromEnum(op.?.kind));
+                        unary_data.as(.four).c = @truncate(@intFromEnum(op.?.token.kind));
                         left = try self.createNode(Node{
                             .kind = .unary_suffix_operator,
                             .data = unary_data,
@@ -2672,11 +2703,10 @@ pub const Parser = struct {
 
     pub fn parsePrimaryExpression(self: *Self) !NodeIndex {
         const ptok = self.peekToken() orelse @panic("EOF");
-        const tidx = self.peekTokenIndex();
 
-        const node = switch (ptok.kind) {
+        const node = switch (ptok.token.kind) {
             .open_paren => {
-                _ = self.nextToken();
+                self.nextToken();
                 const result = try self.parseExpression();
                 _ = try self.expect(.close_paren);
                 return result;
@@ -2684,39 +2714,39 @@ pub const Parser = struct {
             .int_literal => Node{
                 .kind = .int_literal,
                 .data = .{
-                    .long = self.unit.ivalue(tidx),
+                    .long = self.unit.ivalue(ptok.index),
                 },
             },
             .float_literal => Node{
                 .kind = .float_literal,
                 .data = .{
-                    .double = self.unit.fvalue(tidx),
+                    .double = self.unit.fvalue(ptok.index),
                 },
             },
             .string_literal => Node{
                 .kind = .string_literal,
                 .data = .{
-                    .two = .{ .a = @bitCast(tidx), .b = 0 },
+                    .two = .{ .a = @bitCast(ptok.index), .b = 0 },
                 },
             },
             .char_literal => blk: {
                 var node_data: NodeData = undefined;
-                node_data.as(.eight).a = self.unit.charAt(tidx);
+                node_data.as(.eight).a = self.unit.charAt(ptok.index);
                 break :blk Node{
                     .kind = .char_literal,
                     .data = node_data,
                 };
             },
             .identifier => {
-                _ = self.nextToken();
+                self.nextToken();
                 const ntok = self.peekToken();
-                if (ntok != null and ntok.?.kind == .colon) {
-                    _ = self.nextToken();
+                if (ntok != null and ntok.?.token.kind == .colon) {
+                    self.nextToken();
                     const stmt = try self.parseStatement();
                     return try self.createNode(Node{
                         .kind = .label,
                         .data = .{
-                            .two = .{ .a = @bitCast(tidx), .b = stmt },
+                            .two = .{ .a = @bitCast(ptok.index), .b = stmt },
                         },
                     });
                 }
@@ -2724,49 +2754,34 @@ pub const Parser = struct {
                 return self.createNode(Node{
                     .kind = .identifier,
                     .data = .{
-                        .two = .{ .a = @bitCast(tidx), .b = 0 },
+                        .two = .{ .a = @bitCast(ptok.index), .b = 0 },
                     },
                 });
             },
-            else => std.debug.panic("Unexpected in primary {}", .{ptok.kind}),
+            else => std.debug.panic("Unexpected in primary {}", .{ptok.token.kind}),
         };
 
         return try self.createNodeAndNext(node);
     }
 
-    fn nextToken(self: *Self) ?tok.Token {
-        if (self.unit.virtual_token_next < self.unit.virtual_tokens.items.len) {
-            const tidx = self.unit.virtual_tokens.items[self.unit.virtual_token_next];
-            self.unit.virtual_token_next += 1;
-            return self.unit.token(tidx);
-        }
+    const TokenResult = struct {
+        index: tok.TokenIndex,
+        token: tok.Token,
+    };
+
+    inline fn nextToken(self: *Self) void {
         const index = self.tokenizer.next();
-        if (index == null) return null;
-
-        return self.unit.token(index.?);
+        _ = index;
     }
 
-    fn peekToken(self: *Self) ?tok.Token {
-        if (!self.in_handle_pp) {
-            self.handlePP() catch @panic("OOM");
-        }
-        if (self.unit.virtual_token_next < self.unit.virtual_tokens.items.len) {
-            const tidx = self.unit.virtual_tokens.items[self.unit.virtual_token_next];
-            return self.unit.token(tidx);
-        }
+    fn peekToken(self: *Self) ?TokenResult {
         const index = self.tokenizer.peek();
         if (index == null) return null;
 
-        return self.unit.token(index.?);
-    }
-
-    fn peekTokenIndex(self: *Self) tok.TokenIndex {
-        if (self.unit.virtual_token_next < self.unit.virtual_tokens.items.len) {
-            const token_index = self.unit.virtual_tokens.items[self.unit.virtual_token_next];
-            return token_index;
-        }
-        const index = self.tokenizer.peek();
-        return index.?;
+        return .{
+            .token = self.unit.token(index.?),
+            .index = index.?,
+        };
     }
 
     inline fn hasNext(self: *Self) bool {
@@ -2797,29 +2812,28 @@ pub const Parser = struct {
         return index.?;
     }
 
-    fn expect(self: *Self, kind: tok.TokenKind) !tok.Token {
+    fn expect(self: *Self, kind: tok.TokenKind) !TokenResult {
         const token = self.peekToken();
         if (token == null) return error.OutOfTokens;
 
-        if (token.?.kind == kind) {
-            _ = self.nextToken();
+        if (token.?.token.kind == kind) {
+            self.nextToken();
             return token.?;
         } else {
-            std.log.err("Found {}", .{token.?.kind});
+            std.log.err("Found {}", .{token.?.token.kind});
             return error.UnexpectedToken;
         }
     }
 
     fn expectIndex(self: *Self, kind: tok.TokenKind) !tok.TokenIndex {
         const token = self.peekToken();
-        const tidx = self.peekTokenIndex();
         if (token == null) return error.OutOfTokens;
 
-        if (token.?.kind == kind) {
-            _ = self.nextToken();
-            return tidx;
+        if (token.?.token.kind == kind) {
+            self.nextToken();
+            return token.?.index;
         } else {
-            std.log.err("Found {}", .{token.?.kind});
+            std.log.err("Found {}", .{token.?.token.kind});
             return error.UnexpectedToken;
         }
     }
@@ -2863,212 +2877,31 @@ pub const Parser = struct {
         }
     }
 
-    fn handlePP(self: *Self) (ParseError || std.mem.Allocator.Error)!void {
-        const old_handle_pp = self.in_handle_pp;
-        self.in_handle_pp = true;
-        defer self.in_handle_pp = old_handle_pp;
+    //             } else if (std.mem.eql(u8, directive, "include")) {
+    //                 const ptok = self.rawPeekTokenEOL();
+    //                 if (ptok != null and ptok.?.token.kind == .string_literal) {
+    //                     tidx = self.peekTokenIndex();
+    //                     _ = self.tokenizer.nextEOL();
+    //                     const file_path = self.unit.stringAt(tidx);
+    //                     const this_file_dir_path = std.fs.path.dirname(self.unit.files.items[0].file_path).?;
+    //                     const full_file_path = try std.fs.path.resolve(self.allocator, &.{
+    //                         this_file_dir_path, file_path,
+    //                     });
 
-        var token = self.peekToken() orelse return;
-        var tidx = self.peekTokenIndex();
-        switch (token.kind) {
-            .pp_directive => {
-                _ = self.nextToken();
-                const directive = self.unit.ppDirective(tidx);
-                if (std.mem.eql(u8, directive, "define")) {
-                    const ident_idx = try self.rawExpectEOLIndex(.identifier);
+    //                     std.log.info("file is {s} {s}", .{ full_file_path, file_path });
+    //                     var file = std.fs.openFileAbsolute(full_file_path, .{}) catch @panic("dang");
+    //                     const file_contents = file.readToEndAlloc(self.allocator, std.math.maxInt(usize)) catch |e| std.debug.panic("foo {}", .{e});
+    //                     defer self.allocator.free(file_contents);
 
-                    var ptok = self.rawPeekTokenEOL();
-                    if (ptok != null and ptok.?.kind == .open_paren) {
-                        _ = self.tokenizer.next();
-
-                        var parameter_map = std.StringArrayHashMap(void).init(self.allocator);
-
-                        ptok = self.rawPeekTokenEOL();
-                        blk: {
-                            while (ptok) |p| : (ptok = self.rawPeekTokenEOL()) {
-                                tidx = self.rawPeekTokenEOLIndex();
-                                switch (p.kind) {
-                                    .identifier => try parameter_map.put(self.unit.identifier(tidx), {}),
-                                    .close_paren => {
-                                        _ = self.tokenizer.nextEOL();
-                                        break;
-                                    },
-                                    else => std.debug.panic("TODO: add error handling (expected comma or paren) {}", .{p.kind}),
-                                }
-                                _ = self.tokenizer.nextEOL();
-
-                                ptok = self.rawPeekTokenEOL();
-                                if (ptok == null) @panic("TODO: expected at least paren");
-
-                                switch (ptok.?.kind) {
-                                    .comma => _ = self.tokenizer.nextEOL(),
-                                    .close_paren => {
-                                        _ = self.tokenizer.nextEOL();
-                                        break :blk;
-                                    },
-                                    else => std.debug.panic("TODO: add error handling (expected comma or paren) {}", .{p.kind}),
-                                }
-                            }
-                        }
-
-                        const start = self.tokenizer.tokenCount();
-                        var count: u32 = 0;
-
-                        while (self.tokenizer.nextEOL()) |_| {
-                            count += 1;
-                        }
-
-                        try self.unit.define_fns.put(self.unit.identifier(ident_idx), .{
-                            .token_start = .{
-                                .index = @truncate(start),
-                                .file_index = 0,
-                            },
-                            .token_count = count,
-                            .parameters = parameter_map,
-                        });
-                    } else {
-                        const start = self.tokenizer.tokenCount();
-                        var count: u32 = 0;
-
-                        while (self.tokenizer.nextEOL()) |_| {
-                            count += 1;
-                        }
-                        std.log.info("Define start is {} {}", .{ start, count });
-
-                        try self.unit.defines.put(self.unit.identifier(ident_idx), .{
-                            .token_start = .{
-                                .index = @truncate(start),
-                                .file_index = 0,
-                            },
-                            .token_count = count,
-                        });
-                    }
-                } else if (std.mem.eql(u8, directive, "include")) {
-                    const ptok = self.rawPeekTokenEOL();
-                    if (ptok != null and ptok.?.kind == .string_literal) {
-                        tidx = self.peekTokenIndex();
-                        _ = self.tokenizer.nextEOL();
-                        const file_path = self.unit.stringAt(tidx);
-                        const this_file_dir_path = std.fs.path.dirname(self.unit.files.items[0].file_path).?;
-                        const full_file_path = try std.fs.path.resolve(self.allocator, &.{
-                            this_file_dir_path, file_path,
-                        });
-
-                        std.log.info("file is {s} {s}", .{ full_file_path, file_path });
-                        var file = std.fs.openFileAbsolute(full_file_path, .{}) catch @panic("dang");
-                        const file_contents = file.readToEndAlloc(self.allocator, std.math.maxInt(usize)) catch |e| std.debug.panic("foo {}", .{e});
-                        defer self.allocator.free(file_contents);
-
-                        var file_tokenizer = Tokenizer.initVirtual(self.allocator, self.unit, @truncate(self.unit.files.items.len));
-                        while (file_tokenizer.next()) |pt| {
-                            std.log.debug("Token: {}", .{pt});
-                        }
-                    } else {
-                        @panic("todo");
-                    }
-                }
-            },
-            .identifier => {
-                try self.handlePPIdentifier(tidx);
-            },
-            else => {},
-        }
-
-        token = self.peekToken() orelse return;
-        tidx = self.peekTokenIndex();
-        switch (token.kind) {
-            .identifier => {
-                try self.handlePPIdentifier(tidx);
-            },
-            else => return,
-        }
-    }
-
-    fn handlePPIdentifier(self: *Self, tidx: tok.TokenIndex) !void {
-        const ident_str = self.unit.identifier(tidx);
-
-        if (self.unit.defines.get(ident_str)) |value| {
-            _ = self.nextToken();
-
-            const token_slice = self.unit.tokenSliceCount(value.token_start, value.token_count);
-            if (self.unit.virtual_tokens.items.len == 0 or (self.unit.virtual_token_next >= self.unit.virtual_tokens.items.len)) {
-                self.unit.virtual_tokens.items.len = 0;
-                self.unit.virtual_token_next = 0;
-            }
-            try self.unit.virtual_tokens.insertSlice(self.unit.virtual_token_next, token_slice);
-
-            try self.handlePP();
-        } else if (self.unit.define_fns.get(ident_str)) |fn_value| {
-            _ = self.nextToken();
-            _ = try self.expect(.open_paren);
-            var ptok = self.rawPeekToken();
-
-            var argument_map = std.StringHashMap(DefineValue).init(self.allocator);
-            var argument_start_token_index = self.tokenizer.tokenCount();
-            var parameter_iter = fn_value.parameters.iterator();
-
-            var indent: u32 = 0;
-            blk: {
-                var i: u32 = 0;
-                while (ptok) |p| : (ptok = self.rawPeekToken()) {
-                    switch (p.kind) {
-                        .open_paren, .open_brace, .open_bracket => indent += 1,
-                        .close_paren => {
-                            if (indent == 0) {
-                                if (i > 0) {
-                                    const param = parameter_iter.next() orelse @panic("TODO: parameter arg mismatch");
-                                    try argument_map.put(param.key_ptr.*, DefineValue{
-                                        .token_start = argument_start_token_index,
-                                        .token_count = self.tokenizer.tokenCount() - argument_start_token_index,
-                                    });
-                                }
-                                break :blk;
-                            }
-                        },
-                        .close_brace, .close_bracket => indent -= 1,
-                        .comma => {
-                            if (indent == 0) {
-                                const param = parameter_iter.next() orelse @panic("TODO: parameter arg mismatch");
-                                try argument_map.put(param.key_ptr.*, DefineValue{
-                                    .token_start = argument_start_token_index,
-                                    .token_count = self.tokenizer.tokenCount() - argument_start_token_index,
-                                });
-                                argument_start_token_index = self.tokenizer.tokenCount();
-                            }
-                        },
-                        else => {},
-                    }
-                    i += 1;
-                    _ = self.tokenizer.next();
-                }
-            }
-            _ = try self.expect(.close_paren);
-            if (argument_map.count() != fn_value.parameters.count()) {
-                std.debug.panic("TODO: error (expected {} arg found {})", .{ fn_value.parameters.count(), argument_map.count() });
-            }
-
-            self.expansion_argument_map = argument_map;
-
-            const token_slice = self.unit.tokens[0].items[fn_value.token_start .. fn_value.token_start + fn_value.token_count];
-            if (self.unit.virtual_tokens.items.len == 0 or (self.unit.virtual_token_next >= self.unit.virtual_tokens.items.len)) {
-                self.unit.virtual_tokens.items.len = 0;
-                self.unit.virtual_token_next = 0;
-            }
-            try self.unit.virtual_tokens.insertSlice(self.unit.virtual_token_next, token_slice);
-
-            try self.handlePP();
-        } else if (self.expansion_argument_map.get(ident_str)) |value| {
-            _ = self.nextToken();
-            const token_slice = self.unit.tokens[0].items[value.token_start .. value.token_start + value.token_count];
-            if (self.unit.virtual_tokens.items.len == 0 or (self.unit.virtual_token_next >= self.unit.virtual_tokens.items.len)) {
-                self.unit.virtual_tokens.items.len = 0;
-                self.unit.virtual_token_next = 0;
-            }
-            try self.unit.virtual_tokens.insertSlice(self.unit.virtual_token_next, token_slice);
-
-            try self.handlePP();
-        }
-    }
+    //                     var file_tokenizer = Tokenizer.initVirtual(self.allocator, self.unit, @truncate(self.unit.files.items.len));
+    //                     while (file_tokenizer.next()) |pt| {
+    //                         std.log.debug("Token: {}", .{pt});
+    //                     }
+    //                 } else {
+    //                     @panic("todo");
+    //                 }
+    //             }
+    //         },
 
     inline fn relativeOffset(self: *Self, offset: u32) u32 {
         return @as(u32, @truncate(self.unit.nodes.items.len)) - offset;
@@ -3083,7 +2916,7 @@ pub const Parser = struct {
 
     fn createNodeAndNext(self: *Self, node: Node) !NodeIndex {
         const result = try self.createNode(node);
-        _ = self.nextToken();
+        self.nextToken();
         return result;
     }
 };
