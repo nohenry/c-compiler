@@ -473,7 +473,6 @@ pub const Tokenizer = struct {
     }
 
     fn checkExpansion(self: *Self, str: []const u8, eol: bool) ?TokenIndex {
-        std.log.info("CheckExpansion {s}", .{str});
         if (self.searchExpansionArg(str)) |value| {
             self.pushVirtual(value.range);
             return if (eol) self.nextEOL() else self.next();
@@ -860,7 +859,57 @@ pub const Tokenizer = struct {
                                 },
                             };
                         }
-                    } else if (std.mem.eql(u8, directive_str, "define")) {}
+                    } else if (std.mem.eql(u8, directive_str, "include")) {
+                        const first_token_index = self.nextEOL() orelse @panic("Unexpected end of input");
+                        const first_token = self.unit.token(first_token_index);
+
+                        const full_file_path = if (first_token.kind == .string_literal) blk2: {
+                            const file_path = self.unit.stringAt(first_token_index);
+
+                            const full_file_path = self.unit.searchQuoteDirs(self.file_index, file_path) orelse std.debug.panic("Cannot find include file \x1b[1;36m'{s}'\x1b[0m", .{file_path});
+                            break :blk2 full_file_path;
+                        } else if (first_token.kind == .lt) blk2: {
+                            const first_string_token = self.next() orelse @panic("Unexpected EOF");
+                            const end_index = blk1: {
+                                while (self.next()) |pidx| {
+                                    const p = self.unit.token(pidx);
+                                    if (p.kind == .gt) {
+                                        break :blk1 pidx;
+                                    }
+                                } else break :blk1 null;
+                            };
+
+                            const start_source_index = self.unit.token(first_string_token).start;
+                            const end_source_index = self.unit.token(end_index.?).start;
+                            const file_path = self.unit.files.items[self.file_index].source[start_source_index..end_source_index];
+                            const full_file_path = self.unit.searchIncludeDirs(file_path) orelse std.debug.panic("Cannot find include file \x1b[1;36m'{s}'\x1b[0m", .{file_path});
+
+                            break :blk2 full_file_path;
+                        } else {
+                            std.debug.panic("Expected string literal or <> for include path. Found {}", .{first_token.kind});
+                        };
+
+                        var file = std.fs.openFileAbsolute(full_file_path, .{}) catch @panic("error opening file");
+                        const file_contents = file.readToEndAlloc(self.allocator, std.math.maxInt(usize)) catch |e| std.debug.panic("foo {}", .{e});
+
+                        const unit_file = self.unit.addFile(full_file_path, file_contents);
+
+                        var file_tokenizer = Tokenizer.initVirtual(self.allocator, self.unit, unit_file);
+                        const first_file_token = file_tokenizer.next();
+
+                        while (file_tokenizer.next()) |pt| {
+                            std.log.debug("Token: {}", .{pt});
+                        }
+
+                        if (first_file_token) |fft| {
+                            self.pushVirtual(.{ .start = fft, .end = .{
+                                .index = fft.index + @as(TokenIndexType, @truncate(self.unit.files.items[fft.file_index].tokens.items.len)),
+                                .file_index = fft.file_index,
+                            }, .flags = 0 });
+                        }
+
+                        return self.next();
+                    }
 
                     self.in_define = old_define;
                     return self.next();

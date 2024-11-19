@@ -74,8 +74,6 @@ pub const Unit = struct {
     allocator: std.mem.Allocator,
     type_names: std.StringHashMap(void),
     files: std.ArrayList(File),
-    // virtual_tokens: std.ArrayList(TokenRange),
-    // virtual_token_next: u32 = 0,
 
     nodes: std.ArrayList(Node),
     node_ranges: std.ArrayList(NodeIndex),
@@ -83,7 +81,7 @@ pub const Unit = struct {
     defines: std.StringHashMap(DefineValue),
     define_fns: std.StringHashMap(DefineFunction),
 
-    // string_interner: StringInterner,
+    include_dirs: std.ArrayList([]const u8),
 
     const Self = @This();
 
@@ -95,19 +93,69 @@ pub const Unit = struct {
             .tokens = std.ArrayList(Token).init(allocator),
         }) catch @panic("OOM");
 
+        var include_dirs = std.ArrayList([]const u8).init(allocator);
+        include_dirs.append("/opt/homebrew/Cellar/llvm/18.1.7/lib/clang/18/include") catch @panic("OOM");
+        include_dirs.append("/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk/usr/include") catch @panic("OOM");
+
         return .{
             .allocator = allocator,
             .files = files,
             .type_names = std.StringHashMap(void).init(allocator),
-            // .tokens = .{ std.ArrayList(Token).init(allocator), std.ArrayList(Token).init(allocator) },
-            // .virtual_tokens = std.ArrayList(TokenRange).init(allocator),
 
             .nodes = std.ArrayList(Node).init(allocator),
             .node_ranges = std.ArrayList(NodeIndex).init(allocator),
             .defines = std.StringHashMap(DefineValue).init(allocator),
             .define_fns = std.StringHashMap(DefineFunction).init(allocator),
-            // .string_interner = StringInterner.init(allocator),
+            .include_dirs = include_dirs,
         };
+    }
+
+
+    pub fn addFile(self: *Unit, file_path: []const u8, source: []const u8) FileIndex {
+        const index: FileIndex = @truncate(self.files.items.len);
+        self.files.append(File{
+            .file_path = self.allocator.dupe(u8, file_path) catch @panic("OOM"),
+            .source = source,
+            .tokens = std.ArrayList(Token).init(self.allocator),
+        }) catch @panic("OOM");
+
+        return index;
+    }
+
+    pub fn searchQuoteDirs(self: *Unit, this_file: FileIndex, file_path: []const u8) ?[]const u8 {
+        var buffer: [512]u8 = undefined;
+        var allocator = std.heap.FixedBufferAllocator.init(&buffer);
+
+        const this_file_dir_path = std.fs.path.dirname(self.files.items[this_file].file_path).?;
+        const full_file_path = std.fs.path.resolve(allocator.allocator(), &.{
+            this_file_dir_path, file_path,
+        }) catch @panic("Unable to resolve include filea");
+
+        const file = std.fs.openFileAbsolute(full_file_path, .{}) catch {
+            return self.searchIncludeDirs(file_path);
+        };
+
+        file.close();
+        return self.allocator.dupe(u8, full_file_path) catch @panic("OOM");
+    }
+
+    pub fn searchIncludeDirs(self: *Unit, file_path: []const u8) ?[]const u8 {
+        var buffer: [512]u8 = undefined;
+        var allocator = std.heap.FixedBufferAllocator.init(&buffer);
+        for (self.include_dirs.items) |include_dir| {
+            const full_file_path = std.fs.path.resolve(allocator.allocator(), &.{
+                include_dir, file_path,
+            }) catch @panic("Unable to resolve include filea");
+
+            const file = std.fs.openFileAbsolute(full_file_path, .{}) catch {
+                defer allocator.reset();
+                continue;
+            };
+            file.close();
+            return self.allocator.dupe(u8, full_file_path) catch @panic("OOM");
+        }
+
+        return null;
     }
 
     pub inline fn tokens(self: *Unit, file_index: FileIndex) *std.ArrayList(Token) {
