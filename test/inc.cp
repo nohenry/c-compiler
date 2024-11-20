@@ -1,1 +1,1 @@
-const int bar = 2;
+#include "inc1.cp"

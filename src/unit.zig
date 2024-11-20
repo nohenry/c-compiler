@@ -19,6 +19,7 @@ pub const DefineFunction = struct {
     range: TokenRange,
 
     parameters: std.StringArrayHashMap(void),
+    var_arg: bool,
 };
 
 pub const StringInterner = struct {
@@ -110,6 +111,22 @@ pub const Unit = struct {
         };
     }
 
+    pub inline fn filePos(self: *Unit, tidx: TokenIndex) struct{[]const u8, u32} {
+        return .{
+            self.files.items[tidx.file_index].file_path,
+            self.files.items[tidx.file_index].tokens.items[tidx.index].start,
+        };
+    }
+
+    pub fn define(self: *Unit, key: []const u8) void {
+        self.defines.put(key, .{
+            .range = .{
+                .start = .{ .file_index = 0, .index = 0 },
+                .end = .{ .file_index = 0, .index = 0 },
+                .flags = 0,
+            },
+        }) catch @panic("OOM");
+    }
 
     pub fn addFile(self: *Unit, file_path: []const u8, source: []const u8) FileIndex {
         const index: FileIndex = @truncate(self.files.items.len);
@@ -162,7 +179,7 @@ pub const Unit = struct {
         return &self.files.items[file_index].tokens;
     }
 
-    pub inline fn token(self: *const Unit, tidx: TokenIndex) Token {
+    pub fn token(self: *const Unit, tidx: TokenIndex) Token {
         return self.files.items[tidx.file_index].tokens.items[tidx.index];
     }
 
@@ -234,7 +251,7 @@ pub const Unit = struct {
         var index = tok.start;
         while (index < source.len) : (index += 1) {
             switch (source[index]) {
-                'a'...'z', 'A'...'Z', '_' => continue,
+                'a'...'z', 'A'...'Z', '_', '0'...'9' => continue,
                 else => break,
             }
         }
@@ -304,7 +321,7 @@ pub const Unit = struct {
         var index = tok.start;
         while (index < source.len) : (index += 1) {
             switch (source[index]) {
-                'a'...'z', 'A'...'Z', '_' => continue,
+                'a'...'z', 'A'...'Z', '_', '0'...'9' => continue,
                 else => break,
             }
         }

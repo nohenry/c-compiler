@@ -1,6 +1,7 @@
 const std = @import("std");
 const Unit = @import("unit.zig").Unit;
 const DefineValue = @import("unit.zig").DefineValue;
+const Parser = @import("parser.zig").Parser;
 
 pub const TokenKind = enum(u32) {
     int_literal,
@@ -253,19 +254,29 @@ pub const Token = struct {
 
 pub const ArgumentMap = std.StringHashMap(DefineValue);
 
+pub const FileTokenizer = struct {
+    tokenizer: *Tokenizer,
+    pos: u32 = 0,
+    source: []const u8,
+    file_index: FileIndexType,
+
+    const Self = @This();
+};
+
 pub const Tokenizer = struct {
     allocator: std.mem.Allocator,
     unit: *Unit,
     pos: u32 = 0,
-    token_index: u8 = 0,
     source: []const u8,
     file_index: FileIndexType,
 
     virtual_stack: std.ArrayList(TokenRange),
     expansion_stack: std.ArrayList(ArgumentMap),
-    virtual_index: u32 = 0,
+    if_stack: std.BitStack,
     peeked_token: ?TokenIndex = null,
     in_define: bool = false,
+
+    conditional_skip: bool = false,
 
     const Self = @This();
 
@@ -275,6 +286,7 @@ pub const Tokenizer = struct {
             .unit = unit,
             .virtual_stack = std.ArrayList(TokenRange).init(allocator),
             .expansion_stack = std.ArrayList(ArgumentMap).init(allocator),
+            .if_stack = std.BitStack.init(allocator),
             .source = unit.files.items[file_index].source,
             .file_index = file_index,
         };
@@ -286,8 +298,16 @@ pub const Tokenizer = struct {
             .unit = unit,
             .virtual_stack = std.ArrayList(TokenRange).init(allocator),
             .expansion_stack = std.ArrayList(ArgumentMap).init(allocator),
+            .if_stack = std.BitStack.init(allocator),
             .source = unit.files.items[file_index].source,
-            .token_index = 1,
+            .file_index = file_index,
+        };
+    }
+
+    pub fn initFile(self: *Self, file_index: FileIndexType) FileTokenizer {
+        return .{
+            .tokenizer = self,
+            .source = self.unit.files.items[file_index].source,
             .file_index = file_index,
         };
     }
@@ -422,6 +442,53 @@ pub const Tokenizer = struct {
         }
 
         var c: u8 = undefined;
+        if (self.conditional_skip) blk: {
+            var indent: u32 = 0;
+            while (self.pos < self.source.len) : (self.pos += 1) {
+                c = self.source[self.pos];
+
+                if (c == '#') {
+                    self.pos += 1;
+                    const start_index = self.pos;
+                    while (self.pos < self.source.len) : (self.pos += 1) {
+                        switch (self.source[self.pos]) {
+                            'a'...'z', 'A'...'Z', '_' => continue,
+                            else => break,
+                        }
+                    }
+
+                    const directive_str = self.source[start_index..self.pos];
+                    if (std.mem.eql(u8, directive_str, "ifdef") or std.mem.eql(u8, directive_str, "ifndef") or std.mem.eql(u8, directive_str, "if")) {
+                        indent += 1;
+                    } else if (std.mem.eql(u8, directive_str, "endif")) {
+                        if (indent == 0) {
+                            _ = self.if_stack.pop();
+                            self.conditional_skip = false;
+                            break :blk;
+                        }
+
+                        indent -= 1;
+                    } else if (std.mem.eql(u8, directive_str, "else")) {
+                        if (indent == 0) {
+                            const did_condition = self.if_stack.peek();
+                            self.conditional_skip = did_condition == 1;
+                        }
+                    } else if (std.mem.eql(u8, directive_str, "elif")) {
+                        if (indent == 0) {
+                            const did_condition = self.if_stack.peek();
+                            self.conditional_skip = did_condition == 1;
+                            if (did_condition == 0) {
+                                self.pos -= @truncate("#elif".len);
+                            }
+                            break :blk;
+                        }
+                    }
+
+                    self.pos -= 1; // since we add one at next iteration
+                }
+            }
+        }
+
         while (self.pos < self.source.len) : (self.pos += 1) {
             c = self.source[self.pos];
             switch (c) {
@@ -430,10 +497,9 @@ pub const Tokenizer = struct {
                     if (self.pos + 1 < self.source.len) {
                         if (self.source[self.pos + 1] == '/') {
                             while (self.isNot(0, '\n')) : (self.pos += 1) {}
-                            self.pos += 1; // for newline
                         } else if (self.source[self.pos + 1] == '*') {
                             while (self.isNot(0, '*') or self.isNot(1, '/')) : (self.pos += 1) {}
-                            self.pos += 2; // for */
+                            self.pos += 1; // for */
                         } else {
                             break;
                         }
@@ -468,7 +534,8 @@ pub const Tokenizer = struct {
         if (token.kind == kind) {
             return tidx.?;
         } else {
-            std.debug.panic("Expected token {}, found {}", .{ kind, token.kind });
+            std.log.err("File: {s}, pos: {}", .{ self.unit.files.items[tidx.?.file_index].file_path, token.start });
+            std.debug.panic("Expected token {}, found {}, {}", .{ kind, token.kind, self.unit.ivalue(tidx.?) });
         }
     }
 
@@ -479,11 +546,14 @@ pub const Tokenizer = struct {
         }
 
         if (self.unit.defines.get(str)) |def| {
-            self.pushVirtual(def.range);
+            if (def.range.start.index < def.range.end.index) {
+                self.pushVirtual(def.range);
+            }
             return if (eol) self.nextEOL() else self.next();
         }
 
         if (self.unit.define_fns.get(str)) |def| {
+            std.log.info("DefineFunction {s} {}", .{ str, self.unit.files.items[def.range.start.file_index].tokens.items[def.range.start.index].start });
             const open_paren_index = self.expect(.open_paren);
 
             var argument_map = ArgumentMap.init(self.allocator);
@@ -544,11 +614,14 @@ pub const Tokenizer = struct {
 
             self.expansion_stack.append(argument_map) catch @panic("OOM");
 
-            self.pushVirtual(TokenRange{
-                .start = def.range.start,
-                .end = def.range.end,
-                .flags = TokenRange.Flags.EXPANSION_ARGUMENTS,
-            });
+            if (def.range.start.index < def.range.end.index) {
+                self.pushVirtual(TokenRange{
+                    .start = def.range.start,
+                    .end = def.range.end,
+                    .flags = TokenRange.Flags.EXPANSION_ARGUMENTS,
+                });
+            }
+
             return if (eol) self.nextEOL() else self.next();
         }
 
@@ -729,7 +802,7 @@ pub const Tokenizer = struct {
                 'a'...'z', 'A'...'Z', '_' => {
                     while (self.pos < self.source.len) : (self.pos += 1) {
                         switch (self.source[self.pos]) {
-                            'a'...'z', 'A'...'Z', '_' => continue,
+                            'a'...'z', 'A'...'Z', '_', '0'...'9' => continue,
                             else => break,
                         }
                     }
@@ -770,8 +843,11 @@ pub const Tokenizer = struct {
 
                     if (std.mem.eql(u8, directive_str, "define")) {
                         const first_token = self.nextEOL(); // identifier
-                        const second_token = self.nextEOL(); // possibly open paren
-                        //
+                        const second_token = if (self.pos < self.source.len and self.source[self.pos] == '(') // Open paren must be immediately after identifier
+                            self.nextEOL()
+                        else
+                            null;
+
                         if (first_token == null) {
                             @panic("Unexpected EOF");
                         }
@@ -779,6 +855,7 @@ pub const Tokenizer = struct {
                         const define_name = self.unit.token(first_token.?);
                         std.debug.assert(define_name.kind == .identifier);
                         const define_str = self.unit.identifier(first_token.?);
+                        var var_arg = false;
 
                         if (second_token != null and self.unit.token(second_token.?).kind == .open_paren) {
                             // Function type macro
@@ -788,10 +865,19 @@ pub const Tokenizer = struct {
                                 const p = self.unit.token(pidx);
                                 switch (p.kind) {
                                     .identifier => parameter_map.put(self.unit.identifier(pidx), {}) catch @panic("OOM"),
+                                    .ellipsis => {
+                                        var_arg = true;
+                                        _ = self.expect(.close_paren);
+                                        break;
+                                    },
                                     .close_paren => {
                                         break;
                                     },
-                                    else => std.debug.panic("TODO: add error handling (expected comma or paren) {}", .{p.kind}),
+                                    else => std.debug.panic("TODO: add error handling (expected comma or paren) {}, file: {s}, pos: {}", .{
+                                        p.kind,
+                                        self.unit.files.items[pidx.file_index].file_path,
+                                        self.unit.files.items[pidx.file_index].tokens.items[pidx.index].start,
+                                    }),
                                 }
 
                                 const ptok = self.peekEOL();
@@ -831,19 +917,20 @@ pub const Tokenizer = struct {
                                     },
                                     .flags = 0,
                                 },
+                                .var_arg = var_arg,
                                 .parameters = parameter_map,
                             };
                         } else {
                             // Value type macro
-                            var count: u32 = 1; // starts at one because of second_token
+                            var count: u32 = 0; // starts at one because of second_token
                             while (self.nextEOL()) |_| {
                                 count += 1;
                             }
 
                             const define = self.unit.defines.getOrPut(define_str) catch @panic("OOM");
-                            if (define.found_existing) {
-                                std.debug.panic("Found existing define of name \x1b[1;36m'{s}'\x1b[0m", .{define_str});
-                            }
+                            // if (define.found_existing) {
+                            //     std.debug.panic("Found existing define of name \x1b[1;36m'{s}'\x1b[0m", .{define_str});
+                            // }
 
                             define.value_ptr.* = .{
                                 .range = .{
@@ -897,18 +984,233 @@ pub const Tokenizer = struct {
                         var file_tokenizer = Tokenizer.initVirtual(self.allocator, self.unit, unit_file);
                         const first_file_token = file_tokenizer.next();
 
-                        while (file_tokenizer.next()) |pt| {
-                            std.log.debug("Token: {}", .{pt});
+                        var actual_tokens = std.ArrayList(Token).init(self.allocator);
+                        defer actual_tokens.deinit();
+                        var reverse_range = std.ArrayList(TokenRange).init(self.allocator);
+                        defer reverse_range.deinit();
+
+                        var last_token_index: TokenIndex = undefined;
+                        var last_inserted_index: TokenIndexType = 0;
+                        var range_count: u32 = 0;
+                        if (first_file_token) |fft| {
+                            last_token_index = fft;
+                            range_count += 1;
+                            last_inserted_index = fft.index;
+                            if (fft.file_index == unit_file) {
+                                actual_tokens.append(self.unit.token(fft)) catch @panic("OOM");
+                            }
                         }
 
-                        if (first_file_token) |fft| {
-                            self.pushVirtual(.{ .start = fft, .end = .{
-                                .index = fft.index + @as(TokenIndexType, @truncate(self.unit.files.items[fft.file_index].tokens.items.len)),
-                                .file_index = fft.file_index,
-                            }, .flags = 0 });
+                        std.log.debug("File({}): {s}", .{ unit_file, full_file_path });
+                        std.log.debug("{}", .{self.unit.token(.{.file_index = unit_file, .index = 0})});
+                        while (file_tokenizer.next()) |pt| {
+                            std.log.debug("Token: {}", .{pt});
+                            std.log.debug("    {}", .{self.unit.token(pt)});
+
+                            if (pt.file_index != last_token_index.file_index) {
+                                reverse_range.append(.{
+                                    .start = .{
+                                        .index = last_inserted_index,
+                                        .file_index = last_token_index.file_index,
+                                    },
+                                    .end = .{
+                                        .index = last_inserted_index + @as(TokenIndexType, @truncate(range_count)),
+                                        .file_index = last_token_index.file_index,
+                                    },
+                                    .flags = 0,
+                                }) catch @panic("OOM");
+                                range_count = 0;
+                                last_inserted_index = pt.index;
+                            } else if (pt.index != last_token_index.index + 1) {
+                                reverse_range.append(.{
+                                    .start = .{
+                                        .index = last_inserted_index,
+                                        .file_index = last_token_index.file_index,
+                                    },
+                                    .end = .{
+                                        .index = last_inserted_index + @as(TokenIndexType, @truncate(range_count)),
+                                        .file_index = last_token_index.file_index,
+                                    },
+                                    .flags = 0,
+                                }) catch @panic("OOM");
+                                range_count = 0;
+                                last_inserted_index = pt.index;
+                            } else {
+                                range_count += 1;
+                            }
+
+                            if (pt.file_index == unit_file) {
+                                actual_tokens.append(self.unit.token(pt)) catch @panic("OOM");
+                            }
+                            last_token_index = pt;
+                        }
+                        // self.unit.files.items[unit_file].tokens.items.len = 0;
+                        // self.unit.files.items[unit_file].tokens.appendSlice(actual_tokens.items) catch @panic("OOM");
+
+                        std.log.debug("EndFile", .{});
+
+                        if (last_token_index.file_index != unit_file) {
+                            reverse_range.append(.{
+                                .start = .{
+                                    .index = last_inserted_index,
+                                    .file_index = last_token_index.file_index,
+                                },
+                                .end = .{
+                                    .index = last_inserted_index + @as(TokenIndexType, @truncate(range_count)),
+                                    .file_index = last_token_index.file_index,
+                                },
+                                .flags = 0,
+                            }) catch @panic("OOM");
+                        } else if (range_count > 0) {
+                            reverse_range.append(.{
+                                .start = .{
+                                    .index = last_inserted_index,
+                                    .file_index = unit_file,
+                                },
+                                .end = .{
+                                    .index = last_inserted_index + @as(TokenIndexType, @truncate(range_count)),
+                                    .file_index = unit_file,
+                                },
+                                .flags = 0,
+                            }) catch @panic("OOM");
+                        }
+
+                        var i = reverse_range.items.len;
+                        while (i > 0) {
+                            i -= 1;
+                            self.pushVirtual(reverse_range.items[i]);
                         }
 
                         return self.next();
+                    } else if (std.mem.eql(u8, directive_str, "ifdef")) {
+                        const def_token_index = self.nextEOL() orelse @panic("Unexpected EOF. Expected identifier");
+                        const def_token = self.unit.token(def_token_index);
+                        if (def_token.kind == .identifier) {
+                            const def_token_str = self.unit.identifier(def_token_index);
+
+                            if (!self.unit.defines.contains(def_token_str) and !self.unit.define_fns.contains(def_token_str)) {
+                                self.conditional_skip = true;
+                                self.if_stack.push(0) catch @panic("OOM");
+                            } else {
+                                self.if_stack.push(1) catch @panic("OOM");
+                            }
+                        } else {
+                            std.debug.panic("Expected identifier but found {}", .{def_token.kind});
+                        }
+                    } else if (std.mem.eql(u8, directive_str, "ifndef")) {
+                        const def_token_index = self.nextEOL() orelse @panic("Unexpected EOF. Expected identifier");
+                        const def_token = self.unit.token(def_token_index);
+                        if (def_token.kind == .identifier) {
+                            const def_token_str = self.unit.identifier(def_token_index);
+
+                            if (self.unit.defines.contains(def_token_str) or self.unit.define_fns.contains(def_token_str)) {
+                                self.conditional_skip = true;
+                                self.if_stack.push(0) catch @panic("OOM");
+                            } else {
+                                self.if_stack.push(1) catch @panic("OOM");
+                            }
+                        } else {
+                            std.debug.panic("Expected identifier but found {}", .{def_token.kind});
+                        }
+                    } else if (std.mem.eql(u8, directive_str, "if")) {
+                        var evaluator = SimpleExpressionEvaluator{
+                            .unit = self.unit,
+                            .tokenizer = self,
+                        };
+
+                        self.in_define = false;
+                        const value = evaluator.evaluate() catch @panic("failed to evaluate #if");
+                        while (self.nextEOL()) |_| {}
+                        self.in_define = true;
+
+                        if (value.int_value == 0) {
+                            self.conditional_skip = true;
+                            self.if_stack.push(0) catch @panic("OOM");
+                        } else {
+                            self.if_stack.push(1) catch @panic("OOM");
+                        }
+                    } else if (std.mem.eql(u8, directive_str, "elif")) {
+                        const did_condition = self.if_stack.peek();
+                        self.conditional_skip = did_condition == 1;
+                        var evaluator = SimpleExpressionEvaluator{
+                            .unit = self.unit,
+                            .tokenizer = self,
+                        };
+
+                        self.in_define = false;
+                        const value = evaluator.evaluate() catch @panic("failed to evaluate #if");
+                        while (self.nextEOL()) |_| {}
+                        self.in_define = true;
+
+                        if (did_condition == 1 or value.int_value == 0) {
+                            self.conditional_skip = true;
+                        }
+                    } else if (std.mem.eql(u8, directive_str, "undef")) {
+                        const def_token_index = self.nextEOL() orelse @panic("Unexpected EOF. Expected identifier");
+                        const def_token = self.unit.token(def_token_index);
+                        if (def_token.kind == .identifier) {
+                            const def_token_str = self.unit.identifier(def_token_index);
+
+                            if (!self.unit.defines.remove(def_token_str)) {
+                                _ = self.unit.define_fns.remove(def_token_str);
+                            }
+                        } else {
+                            std.debug.panic("Expected identifier but found {}", .{def_token.kind});
+                        }
+                    } else if (std.mem.eql(u8, directive_str, "else")) {
+                        const did_condition = self.if_stack.peek();
+                        self.conditional_skip = did_condition == 1;
+                    } else if (std.mem.eql(u8, directive_str, "endif")) {
+                        _ = self.if_stack.pop();
+                        self.conditional_skip = false;
+                    } else if (std.mem.eql(u8, directive_str, "warning")) {
+                        const first_token_index = self.nextEOL() orelse @panic("Unexpected end of input");
+                        const first_token = self.unit.token(first_token_index);
+                        if (first_token.kind == .string_literal) {
+                            const str_value = self.unit.stringAt(first_token_index);
+                            std.log.warn("\x1b[1;33m{s}\x1b[0m", .{str_value});
+                        } else if (first_token.kind == .identifier) {
+                            var str_value = self.unit.identifier(first_token_index);
+                            std.log.warn("\x1b[1;33m{s}\x1b[0m", .{str_value});
+
+                            while (self.nextEOL()) |p| {
+                                const token = self.unit.token(p);
+                                switch (token.kind) {
+                                    .identifier => {
+                                        str_value = self.unit.identifier(first_token_index);
+                                        std.log.warn("\x1b[1;33m{s}\x1b[0m", .{str_value});
+                                    },
+                                    else => {
+                                        std.log.warn("\x1b[1;33mOtherWarning\x1b[0m", .{});
+                                    }
+                                }
+                            }
+
+                        }
+                    } else if (std.mem.eql(u8, directive_str, "error")) {
+                        const first_token_index = self.nextEOL() orelse @panic("Unexpected end of input");
+                        const first_token = self.unit.token(first_token_index);
+                        if (first_token.kind == .string_literal) {
+                            const str_value = self.unit.stringAt(first_token_index);
+                            std.log.err("\x1b[1;31m{s}\x1b[0m", .{str_value});
+                        } else if (first_token.kind == .identifier) {
+                            var str_value = self.unit.identifier(first_token_index);
+                            std.log.err("\x1b[1;31m{s}\x1b[0m", .{str_value});
+
+                            while (self.nextEOL()) |p| {
+                                const token = self.unit.token(p);
+                                switch (token.kind) {
+                                    .identifier => {
+                                        str_value = self.unit.identifier(p);
+                                        std.log.err("\x1b[1;31m{s}\x1b[0m", .{str_value});
+                                    },
+                                    else => {
+                                        std.log.err("\x1b[1;31mOtherWarning\x1b[0m", .{});
+                                    }
+                                }
+                            }
+
+                        }
                     }
 
                     self.in_define = old_define;
@@ -957,9 +1259,7 @@ pub const Tokenizer = struct {
             .plus,
             .minus,
             .lt,
-            .lte,
             .gt,
-            .gte,
             .ampersand,
             .carot,
             .pipe,
@@ -986,6 +1286,8 @@ pub const Tokenizer = struct {
             .carot_eq,
             .pipe_eq,
             .arrow,
+            .gte,
+            .lte,
             => self.pos += 2,
 
             .left_shift_eq,
@@ -996,5 +1298,220 @@ pub const Tokenizer = struct {
             else => @panic("Cannot detmerine for this type of token"),
         }
         return kind;
+    }
+};
+
+const Value = union(enum) {
+    int_value: i64,
+    float_value: f64,
+};
+
+const EvaluationError = error{
+    UnexpectedToken,
+    UnexpectedEnd,
+};
+
+const SimpleExpressionEvaluator = struct {
+    unit: *Unit,
+    tokenizer: *Tokenizer,
+    pos: u32 = 0,
+
+    const Self = @This();
+
+    pub fn evaluate(self: *Self) !Value {
+        return self.evaluateOperatorExpression(0);
+    }
+
+    pub fn unaryPrecedenceRight(token: *const Token) u16 {
+        return switch (token.kind) {
+            .plus,
+            .minus,
+            .exclamation,
+            .tilde,
+            => 140,
+            else => 0,
+        };
+    }
+
+    pub fn binaryPrecedence(token: *const Token) u16 {
+        return switch (token.kind) {
+            .star, .slash, .percent => 130,
+            .plus, .minus => 120,
+            .bit_left_shift, .bit_right_shift => 110,
+            .gt, .gte, .lt, .lte => 100,
+            .equality, .nequality => 90,
+            .carot => 70,
+            .pipe => 60,
+            .double_ampersand => 50,
+            .double_pipe => 40,
+            else => 0,
+        };
+    }
+
+    pub fn evaluateOperatorExpression(self: *Self, last_prec: u16) EvaluationError!Value {
+        var op = self.peek();
+        var left: Value = undefined;
+        blk: {
+            if (op != null) {
+                if (op.?.token.kind == .identifier) {
+                    // 140 is the precedence of defined
+                    if (140 >= last_prec and std.mem.eql(u8, self.unit.identifier(op.?.index), "defined")) {
+                        self.next();
+                        op = self.peek();
+                        if (op != null and op.?.token.kind == .open_paren) {
+                            self.next();
+                            const old_in_define = self.tokenizer.in_define;
+                            defer self.tokenizer.in_define = old_in_define;
+                            self.tokenizer.in_define = true;
+                            op = self.peek();
+                            if (op != null and op.?.token.kind != .identifier) {
+                                std.log.err("Founded token {}, file: {s}, pos: {}", .{ op.?.token.kind, self.unit.files.items[op.?.index.file_index].file_path, self.unit.token(op.?.index).start });
+                                return error.UnexpectedToken;
+                            }
+                            self.next();
+                            const ident_str = self.unit.identifier(op.?.index);
+                            if (self.unit.defines.contains(ident_str) or self.unit.define_fns.contains(ident_str)) {
+                                left = .{ .int_value = 1 };
+                            } else {
+                                left = .{ .int_value = 0 };
+                            }
+                            try self.expect(.close_paren);
+                        } else {
+                            if (op != null and op.?.token.kind != .identifier) {
+                                return error.UnexpectedToken;
+                            }
+                            self.next();
+                            const ident_str = self.unit.identifier(op.?.index);
+                            if (self.unit.defines.contains(ident_str) or self.unit.define_fns.contains(ident_str)) {
+                                left = .{ .int_value = 1 };
+                            } else {
+                                left = .{ .int_value = 0 };
+                            }
+                        }
+                        break :blk;
+                    }
+                }
+
+                const unary_prec_right = unaryPrecedenceRight(&op.?.token);
+
+                if (unary_prec_right != 0 and unary_prec_right >= last_prec) {
+                    self.next();
+                    left = try self.evaluateOperatorExpression(unary_prec_right);
+
+                    left = switch (left) {
+                        .int_value => Value{ .int_value = switch (op.?.token.kind) {
+                            .minus => -left.int_value,
+                            .plus => left.int_value,
+                            .exclamation => if (left.int_value > 0) 0 else 1,
+                            .tilde => ~left.int_value,
+                            else => unreachable,
+                        } },
+                        else => unreachable,
+                    };
+
+                    break :blk;
+                }
+            }
+
+            left = try self.evaluatePrimary();
+        }
+
+        while (true) {
+            op = self.peek();
+            if (op == null) break;
+            const prec = binaryPrecedence(&op.?.token);
+
+            if (prec <= last_prec or prec == 0) {
+                break;
+            }
+            self.next(); // consume operator
+
+            const right = try self.evaluateOperatorExpression(prec);
+
+            left = switch (left) {
+                .int_value => Value{
+                    .int_value = switch (op.?.token.kind) {
+                        .plus => left.int_value + right.int_value,
+                        .minus => left.int_value - right.int_value,
+                        .star => left.int_value * right.int_value,
+                        .slash => @divTrunc(left.int_value, right.int_value),
+                        .bit_left_shift => @shlWithOverflow(left.int_value, @as(u6, @intCast(right.int_value)))[0],
+                        .bit_right_shift => @shrExact(left.int_value, @as(u6, @intCast(right.int_value))),
+                        .ampersand => left.int_value & right.int_value,
+                        .pipe => left.int_value | right.int_value,
+                        .carot => left.int_value ^ right.int_value,
+
+                        .gt => if (left.int_value > right.int_value) 1 else 0,
+                        .gte => if (left.int_value >= right.int_value) 1 else 0,
+                        .lt => if (left.int_value < right.int_value) 1 else 0,
+                        .lte => if (left.int_value <= right.int_value) 1 else 0,
+                        .double_ampersand => if (left.int_value > 0 and right.int_value > 0) 1 else 0,
+                        .double_pipe => if (left.int_value > 0 or right.int_value > 0) 1 else 0,
+                        .equality => if (left.int_value == right.int_value) 1 else 0,
+                        .nequality => if (left.int_value != right.int_value) 1 else 0,
+                        else => unreachable,
+                    },
+                },
+                .float_value => unreachable,
+            };
+        }
+
+        return left;
+    }
+
+    pub fn evaluatePrimary(self: *Self) !Value {
+        const ptok = self.peek() orelse return error.UnexpectedEnd;
+        switch (ptok.token.kind) {
+            .open_paren => {
+                self.next();
+                const result = try self.evaluate();
+                try self.expect(.close_paren);
+                return result;
+            },
+            .int_literal => {
+                self.next();
+                return .{ .int_value = @intCast(self.unit.ivalue(ptok.index)) };
+            },
+            .identifier => {
+                self.next();
+                return .{ .int_value = 0 };
+                // std.log.err("Founded identifier {s}", .{self.unit.identifier(ptok.index)});
+                // return error.UnexpectedToken;
+            },
+            else => {
+                std.log.err("Founded token {}, file: {s}, pos: {}", .{ ptok.token.kind, self.unit.filePos(ptok.index)[0], self.unit.filePos(ptok.index)[1] });
+                return error.UnexpectedToken;
+            },
+        }
+    }
+
+    const NextResult = struct {
+        index: TokenIndex,
+        token: Token,
+    };
+
+    fn expect(self: *Self, kind: TokenKind) !void {
+        const ptok = self.peek();
+        if (ptok == null) return error.UnexpectedEnd;
+
+        if (ptok.?.token.kind != kind) {
+            std.log.err("Founded token {}, file: {s}, pos: {}", .{ ptok.?.token.kind, self.unit.files.items[ptok.?.index.file_index].file_path, self.unit.token(ptok.?.index) });
+            return error.UnexpectedToken;
+        }
+        self.next();
+    }
+
+    fn peek(self: *Self) ?NextResult {
+        const index = self.tokenizer.peekEOL();
+        if (index == null) return null;
+
+        return .{
+            .index = index.?,
+            .token = self.unit.token(index.?),
+        };
+    }
+
+    fn next(self: *Self) void {
+        _ = self.tokenizer.nextEOL();
     }
 };

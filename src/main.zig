@@ -18,6 +18,8 @@ pub fn main() !void {
     std.log.info("CWD: {s}", .{absolute_path});
 
     var unit = Unit.init(gpa.allocator(), absolute_path, source);
+    unit.define("__STDC__");
+    unit.define("__arm64__");
     var tokenizer = Tokenizer.init(gpa.allocator(), &unit, 0);
 
     var parser = Parser.init(&unit, &tokenizer);

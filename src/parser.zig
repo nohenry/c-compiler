@@ -2488,7 +2488,7 @@ pub const Parser = struct {
         return try self.parseOperatorExpression(0);
     }
 
-    fn unaryPrecedence(token: *const tok.Token) u16 {
+    pub fn unaryPrecedence(token: *const tok.Token) u16 {
         return switch (token.kind) {
             .plusplus,
             .minusminus,
@@ -2499,7 +2499,7 @@ pub const Parser = struct {
         };
     }
 
-    fn unaryPrecedenceRight(token: *const tok.Token) u16 {
+    pub fn unaryPrecedenceRight(token: *const tok.Token) u16 {
         return switch (token.kind) {
             .plusplus,
             .minusminus,
@@ -2514,7 +2514,7 @@ pub const Parser = struct {
         };
     }
 
-    fn binaryPrecedence(token: *const tok.Token) u16 {
+    pub fn binaryPrecedence(token: *const tok.Token) u16 {
         return switch (token.kind) {
             .dot, .arrow => 150,
 
@@ -2529,24 +2529,24 @@ pub const Parser = struct {
             .double_ampersand => 50,
             .double_pipe => 40,
 
-            .assignment,
-            .plus_eq,
-            .minus_eq,
-            .star_eq,
-            .slash_eq,
-            .percent_eq,
-            .left_shift_eq,
-            .right_shift_eq,
-            .ampersand_eq,
-            .carot_eq,
-            .pipe_eq,
-            => 20,
+            // .assignment,
+            // .plus_eq,
+            // .minus_eq,
+            // .star_eq,
+            // .slash_eq,
+            // .percent_eq,
+            // .left_shift_eq,
+            // .right_shift_eq,
+            // .ampersand_eq,
+            // .carot_eq,
+            // .pipe_eq,
+            // => 20,
             .comma => 10,
             else => 0,
         };
     }
 
-    fn binaryPrecedenceRight(token: *const tok.Token) u16 {
+    pub fn binaryPrecedenceRight(token: *const tok.Token) u16 {
         return switch (token.kind) {
             .assignment,
             .plus_eq,
@@ -2594,10 +2594,10 @@ pub const Parser = struct {
             op = self.peekToken();
             if (op == null) break;
             const prec = binaryPrecedence(&op.?.token);
-            const prec_right = binaryPrecedence(&op.?.token);
+            const prec_right = binaryPrecedenceRight(&op.?.token);
             const unary_prec_right = unaryPrecedence(&op.?.token);
 
-            if ((prec > last_prec and prec != 0) or (prec_right >= last_prec and prec != 0)) {
+            if ((prec > last_prec and prec != 0) or (prec_right >= last_prec and prec_right != 0)) {
                 self.nextToken(); // consume operator
 
                 const right = try self.parseOperatorExpression(prec);
