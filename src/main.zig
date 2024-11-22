@@ -20,7 +20,8 @@ pub fn main() !void {
     var unit = Unit.init(gpa.allocator(), absolute_path, source);
     unit.define("__STDC__");
     unit.define("__arm64__");
-    var tokenizer = Tokenizer.init(gpa.allocator(), &unit, 0);
+    var tokenizer = Tokenizer.init(gpa.allocator(), &unit);
+    _ = tokenizer.initFile(0);
 
     var parser = Parser.init(&unit, &tokenizer);
     const unit_range = try parser.parseUnit();

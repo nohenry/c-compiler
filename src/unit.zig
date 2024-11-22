@@ -111,7 +111,7 @@ pub const Unit = struct {
         };
     }
 
-    pub inline fn filePos(self: *Unit, tidx: TokenIndex) struct{[]const u8, u32} {
+    pub inline fn filePos(self: *Unit, tidx: TokenIndex) struct { []const u8, u32 } {
         return .{
             self.files.items[tidx.file_index].file_path,
             self.files.items[tidx.file_index].tokens.items[tidx.index].start,
@@ -197,11 +197,51 @@ pub const Unit = struct {
         const source = self.files.items[tidx.file_index].source;
         var index = tok.start;
         var sum: u64 = 0;
+        // while (index < source.len) : (index += 1) {
+        //     switch (source[index]) {
+        //         '0'...'9' => |c| {
+        //             sum *= 10;
+        //             sum += @as(u64, c - '0');
+        //         },
+        //         else => break,
+        //     }
+        // }
+
+        const start = index;
+        var base: u8 = if (source[index] == '0') 8 else 10;
         while (index < source.len) : (index += 1) {
             switch (source[index]) {
-                '0'...'9' => |c| {
-                    sum *= 10;
-                    sum += @as(u64, c - '0');
+                'b', 'B' => {
+                    if (base == 8 and index == start + 1) {
+                        base = 2;
+                    } else if (base > 10 and 1 < base - 10) {
+                        sum *= @as(u64, base);
+                        sum += @as(u64, 11);
+                        continue;
+                    }
+                },
+                'x', 'X' => {
+                    if (base == 8 and index == start + 1) {
+                        base = 16;
+                    }
+                },
+                '0' => {
+                    sum *= @as(u64, base);
+                },
+                '1'...'9' => |x| if (x - '0' < base) {
+                    sum *= @as(u64, base);
+                    sum += @as(u64, source[index] - '0');
+                    continue;
+                },
+                'a', 'c', 'd', 'f'...'k' => |x| if (base > 10 and x - 'a' < base - 10) {
+                    sum *= @as(u64, base);
+                    sum += @as(u64, source[index] - 'a' + 10);
+                    continue;
+                },
+                'A', 'C', 'D', 'F'...'K' => |x| if (base > 10 and x - 'A' < base - 10) {
+                    sum *= @as(u64, base);
+                    sum += @as(u64, source[index] - 'A' + 10);
+                    continue;
                 },
                 else => break,
             }

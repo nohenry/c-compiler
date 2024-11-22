@@ -1379,6 +1379,7 @@ pub const Parser = struct {
                     }
                 },
                 .bool => type_kind = .bool_type,
+                .void => type_kind = .void_type,
                 .@"struct" => return try self.parseStructOrUnion(true),
                 .@"union" => return try self.parseStructOrUnion(false),
                 .@"enum" => return try self.parseEnum(),
@@ -1394,6 +1395,12 @@ pub const Parser = struct {
         }
 
         var type_node_data: NodeData = undefined;
+        if (type_kind == null) {
+            var it = self.unit.type_names.iterator();
+            while (it.next()) |value| {
+                std.log.info("TypeName: \x1b[1;36m'{s}'\x1b[0m", .{value.key_ptr.*});
+            }
+        }
         switch (type_kind.?) {
             .type_name, .atomic_type => {
                 type_node_data.two.a = @bitCast(type_name_token);
@@ -2770,12 +2777,12 @@ pub const Parser = struct {
     };
 
     inline fn nextToken(self: *Self) void {
-        const index = self.tokenizer.next();
+        const index = self.tokenizer.next(false);
         _ = index;
     }
 
     fn peekToken(self: *Self) ?TokenResult {
-        const index = self.tokenizer.peek();
+        const index = self.tokenizer.peek(false);
         if (index == null) return null;
 
         return .{
@@ -2785,30 +2792,30 @@ pub const Parser = struct {
     }
 
     inline fn hasNext(self: *Self) bool {
-        return self.unit.virtual_token_next < self.unit.virtual_tokens.items.len or self.tokenizer.peek() != null;
+        return self.unit.virtual_token_next < self.unit.virtual_tokens.items.len or self.tokenizer.peek(false) != null;
     }
 
     fn rawPeekToken(self: *Self) ?tok.Token {
-        const index = self.tokenizer.peek();
+        const index = self.tokenizer.peek(false);
         if (index == null) return null;
 
         return self.unit.token(index.?);
     }
 
     fn rawPeekTokenIndex(self: *Self) tok.TokenIndex {
-        const index = self.tokenizer.peek();
+        const index = self.tokenizer.peek(false);
         return index.?;
     }
 
     fn rawPeekTokenEOL(self: *Self) ?tok.Token {
-        const index = self.tokenizer.peekEOL();
+        const index = self.tokenizer.peek(true);
         if (index == null) return null;
 
         return self.unit.token(index.?);
     }
 
     fn rawPeekTokenEOLIndex(self: *Self) tok.TokenIndex {
-        const index = self.tokenizer.peekEOL();
+        const index = self.tokenizer.peek(true);
         return index.?;
     }
 
@@ -2839,12 +2846,12 @@ pub const Parser = struct {
     }
 
     fn rawExpect(self: *Self, kind: tok.TokenKind) !tok.Token {
-        const index = self.tokenizer.peek();
+        const index = self.tokenizer.peek(false);
         if (index == null) return error.OutOfTokens;
 
         const token = self.unit.tokens[0].items[index.?];
         if (token.kind == kind) {
-            _ = self.tokenizer.next();
+            _ = self.tokenizer.next(false);
             return token;
         } else {
             return error.UnexpectedToken;
@@ -2852,12 +2859,12 @@ pub const Parser = struct {
     }
 
     fn rawExpectEOL(self: *Self, kind: tok.TokenKind) !tok.Token {
-        const index = self.tokenizer.peekEOL();
+        const index = self.tokenizer.peek(true);
         if (index == null) return error.OutOfTokens;
 
         const token = self.unit.token(index.?);
         if (token.kind == kind) {
-            _ = self.tokenizer.nextEOL();
+            _ = self.tokenizer.next(true);
             return token;
         } else {
             return error.UnexpectedToken;
@@ -2865,12 +2872,12 @@ pub const Parser = struct {
     }
 
     fn rawExpectEOLIndex(self: *Self, kind: tok.TokenKind) !tok.TokenIndex {
-        const index = self.tokenizer.peekEOL();
+        const index = self.tokenizer.peek(true);
         if (index == null) return error.OutOfTokens;
 
         const token = self.unit.token(index.?);
         if (token.kind == kind) {
-            _ = self.tokenizer.nextEOL();
+            _ = self.tokenizer.next(true);
             return index.?;
         } else {
             return error.UnexpectedToken;
