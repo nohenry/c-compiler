@@ -1,0 +1,1 @@
+int fopen ( ) __asm ( "_" "fopen" ) ; int main ( ) { } 

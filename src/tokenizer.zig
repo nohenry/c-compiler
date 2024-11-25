@@ -215,7 +215,17 @@ pub const TokenKind = enum(u32) {
             .@"volatile" => "volatile",
             .@"while" => "while",
 
-            else => @panic(""),
+            .unsigned => "unsigned",
+            .signed => "signed",
+            .char => "char",
+            .short => "short",
+            .int => "int",
+            .long => "long",
+            .float => "float",
+            .double => "double",
+            .bool => "bool",
+
+            else => std.debug.panic("Couldn't convert to string: {}", .{self}),
         };
     }
 };
@@ -722,8 +732,10 @@ pub const FileTokenizer = struct {
     /// and pushes virtual tokens onto the stack, then returns true if was one of the above.
     fn checkExpansion(self: *Self, str: []const u8) bool {
         if (self.searchExpansionArg(str)) |value| {
-            for (value.tokens) |rng| {
-                self.tokenizer.pushVirtual(rng);
+            var i = value.tokens.len;
+            while (i > 0) {
+                i -= 1;
+                self.tokenizer.pushVirtual(value.tokens[i]);
             }
 
             return true;
@@ -740,14 +752,11 @@ pub const FileTokenizer = struct {
             const open_paren_index = self.expect(.open_paren);
 
             var argument_map = ArgumentMap.init(self.tokenizer.allocator);
+            var va_map = if (def.var_arg) std.ArrayList(Argument).init(self.tokenizer.allocator) else undefined;
             var parameter_iter = def.parameters.iterator();
 
             var indent: u32 = 0;
 
-            var argument_start_token_index = TokenIndex{
-                .index = open_paren_index.index + 1,
-                .file_index = open_paren_index.file_index,
-            };
             blk1: {
                 var i: u32 = 0;
                 var tokens = std.ArrayList(TokenRange).init(self.tokenizer.allocator);
@@ -768,10 +777,14 @@ pub const FileTokenizer = struct {
                                         range_count = 0;
                                     }
 
-                                    const param = parameter_iter.next() orelse @panic("TODO: parameter arg mismatch");
-                                    argument_map.put(param.key_ptr.*, Argument{
-                                        .tokens = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM"),
-                                    }) catch @panic("OOM");
+                                const arg = Argument{
+                                    .tokens = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM"),
+                                };
+                                if (parameter_iter.next()) |param| {
+                                    argument_map.put(param.key_ptr.*, arg) catch @panic("OOM");
+                                } else if (def.var_arg) {
+                                    va_map.append(arg) catch @panic("OOM");
+                                } else @panic("TODO: parameter arg mismatch");
                                 }
                                 break :blk1;
                             }
@@ -781,33 +794,35 @@ pub const FileTokenizer = struct {
                         .comma => {
                             if (indent == 0) {
                                 if (last_token) |tidx| {
-                                    if (tidx.file_index == pidx.file_index and pidx.index == pidx.index + 1) {
-                                        range_count += 1;
-                                    } else {
-                                        tokens.append(TokenRange.initEndCount(tidx, range_count)) catch @panic("OOM");
-                                    }
+                                    tokens.append(TokenRange.initEndCount(tidx, range_count)) catch @panic("OOM");
+                                    last_token = null;
+                                    range_count = 0;
                                 }
-                                last_token = null;
-                                range_count = 0;
 
-                                const param = parameter_iter.next() orelse @panic("TODO: parameter arg mismatch");
-
-                                argument_map.put(param.key_ptr.*, Argument{
+                                const arg = Argument{
                                     .tokens = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM"),
-                                }) catch @panic("OOM");
+                                };
+                                if (parameter_iter.next()) |param| {
+                                    argument_map.put(param.key_ptr.*, arg) catch @panic("OOM");
+                                } else if (def.var_arg) {
+                                    va_map.append(arg) catch @panic("OOM");
+                                } else @panic("TODO: parameter arg mismatch");
+
                                 tokens.items.len = 0;
-                                argument_start_token_index.index = @truncate(self.tokenCountFile(argument_start_token_index.file_index));
                                 continue;
                             }
                         },
                         else => {},
                     }
+                    // std.log.info("ArgTok: {}: {}", .{pidx, p});
                     if (last_token) |tidx| {
-                        if (tidx.file_index == pidx.file_index and pidx.index == pidx.index + 1) {
+                        if (tidx.file_index == pidx.file_index and pidx.index == tidx.index + 1) {
+                            // std.log.info("RangeIndex++", .{});
                             range_count += 1;
                         } else {
+                            // std.log.info("AppendRange({}, {})", .{tidx, range_count});
                             tokens.append(TokenRange.initEndCount(tidx, range_count)) catch @panic("OOM");
-                            range_count = 0;
+                            range_count = 1;
                         }
                     } else {
                         range_count += 1;
@@ -823,6 +838,17 @@ pub const FileTokenizer = struct {
                 std.log.err("Error at \x1b[1m'{s}:{}'\x1b[0m", .{ self.tokenizer.unit.files.items[open_paren_index.file_index].file_path, self.tokenizer.unit.token(open_paren_index).start });
                 std.debug.panic("TODO: error (expected {} arg found {})", .{ def.parameters.count(), argument_map.count() });
             }
+
+            // var iter = argument_map.iterator();
+            // while (iter.next()) |arg| {
+            //     std.log.info("\x1b[1;36m{s}\x1b[0m:", .{arg.key_ptr.*});
+            //     for (arg.value_ptr.tokens) |rng| {
+            //         var index = rng.start;
+            //         while (index.index < rng.end.index) : (index.index += 1) {
+            //             std.debug.print("    {}\n", .{self.tokenizer.unit.token(index)});
+            //         }
+            //     }
+            // }
 
             self.tokenizer.expansion_stack.append(argument_map) catch @panic("OOM");
 

@@ -40,6 +40,8 @@ pub const NodeKind = enum(u32) {
 
     /// node_data: a(u32) = token start attribute data, c(u16) = token count, d(u16) relative index of item
     attribute,
+    /// node_data: a(u32) = token start label data, c(u16) = token count, d(u16) relative index of item
+    asm_label,
     /// variable declaration
     /// node_data: a(u32) = index, b(u16) = count, c(u8) = storage
     declaration,
@@ -1020,6 +1022,13 @@ pub const Node = extern struct {
                 try writer.print("\x1b[1;35mAttribute\x1b[0m TokenIndex: {}:{}, Count: {}", .{ token_start.file_index, token_start.index, token_count });
                 result = NodeRangeOrNode.initNodes(&.{declaration});
             },
+            .asm_label => {
+                const token_start: TokenIndex = @bitCast(self.data.as(.two).a);
+                const token_count = self.data.as(.four).c;
+                const declaration = absoluteIndex(index, self.data.as(.four).d);
+                try writer.print("\x1b[1;35mAsmLabel\x1b[0m TokenIndex: {}:{}, Count: {}", .{ token_start.file_index, token_start.index, token_count });
+                result = NodeRangeOrNode.initNodes(&.{declaration});
+            },
             .empty_statement => {
                 try writer.print("\x1b[1;35mEmptyStatement\x1b[0m", .{});
             },
@@ -1212,6 +1221,41 @@ pub const Parser = struct {
         return node_data;
     }
 
+    pub fn parseAsmLabel(self: *Self) !NodeData {
+        var ptok: ?TokenResult = undefined;
+        self.nextToken();
+        _ = try self.expect(.open_paren);
+
+        ptok = self.peekToken();
+        const start_token = if (ptok != null)
+            ptok.?.index
+        else
+            @panic("Unexpcted end");
+
+        var indent: u32 = 0;
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.token.kind) {
+                .close_paren => {
+                    if (indent == 0) break else indent -= 1;
+                },
+                .open_paren => {
+                    indent += 1;
+                },
+                else => {},
+            }
+            self.nextToken();
+        }
+        const end_token = ptok.?.index;
+
+        var node_data: NodeData = undefined;
+        node_data.as(.two).a = @bitCast(start_token);
+        node_data.as(.four).c = @truncate(end_token.index - start_token.index);
+
+        _ = try self.expect(.close_paren);
+
+        return node_data;
+    }
+
     pub fn parseDeclaration(self: *Self, toplevel: bool) !NodeIndex {
         var storage_class: StorageClass.Type = 0;
 
@@ -1279,16 +1323,18 @@ pub const Parser = struct {
                 else => {
                     var this_ident: ?TokenIndex = null;
                     const this_type = try self.parseDeclarator(type_node, &this_ident);
+
+                    var this_attribute_data: ?NodeData = null;
+                    var this_asm_label: ?NodeData = null;
                     ptok = self.peekToken();
-                    var this_attribute_data: ?NodeData = blk: {
-                        if (ptok != null and ptok.?.token.kind == .identifier) {
-                            const ident_str = self.unit.identifierAt(ptok.?.index);
-                            if (std.mem.startsWith(u8, ident_str, "__attribute")) {
-                                break :blk try self.parseAttributeData();
-                            }
+                    if (ptok != null and ptok.?.token.kind == .identifier) {
+                        const ident_str = self.unit.identifierAt(ptok.?.index);
+                        if (std.mem.startsWith(u8, ident_str, "__attribute")) {
+                            this_attribute_data = try self.parseAttributeData();
+                        } else if (std.mem.startsWith(u8, ident_str, "__asm")) {
+                            this_asm_label = try self.parseAsmLabel();
                         }
-                        break :blk null;
-                    };
+                    }
 
                     if (this_type.is_function and !this_type.is_function_ptr) {
                         var decl_node_data: NodeData = undefined;
@@ -1313,6 +1359,15 @@ pub const Parser = struct {
                                 .data = decl_node_data,
                             });
                             node_to_append = function_decl;
+                        }
+
+                        if (this_asm_label) |*tal| {
+                            tal.as(.four).d = self.relativeOffset(node_to_append);
+
+                            node_to_append = try self.createNode(Node{
+                                .kind = .asm_label,
+                                .data = tal.*,
+                            });
                         }
 
                         if (this_attribute_data) |*tad| {
@@ -1352,6 +1407,15 @@ pub const Parser = struct {
                             .data = decl_node_data,
                         });
                         node_to_append = decl;
+
+                        if (this_asm_label) |*tal| {
+                            tal.as(.four).d = self.relativeOffset(node_to_append);
+
+                            node_to_append = try self.createNode(Node{
+                                .kind = .asm_label,
+                                .data = tal.*,
+                            });
+                        }
 
                         if (this_attribute_data) |*tad| {
                             tad.as(.four).d = self.relativeOffset(node_to_append);
