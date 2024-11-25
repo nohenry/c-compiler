@@ -9,9 +9,18 @@ pub const ParseError = error{ OutOfTokens, UnexpectedToken };
 
 pub const NodeKind = enum(u32) {
     empty,
-    int_literal,
     float_literal,
+    double_literal,
+    int_literal,
+    unsigned_int_literal,
+    long_literal,
+    unsigned_long_literal,
+    long_long_literal,
+    unsigned_long_long_literal,
+    size_literal,
+    unsigned_size_literal,
     string_literal,
+    stringified_literal,
     char_literal,
 
     /// node_data: a(u32) = index of lhs, b(u16) = relative index of rhs, c(u16) = operator
@@ -29,9 +38,9 @@ pub const NodeKind = enum(u32) {
     /// node_data: a(u32) = index of array/ptr, b(u32) = index of index expr
     index,
 
+    /// node_data: a(u32) = token start attribute data, c(u16) = token count, d(u16) relative index of item
+    attribute,
     /// variable declaration
-    /// node_data: a(u16) = relative offset, b(u16) = count, c(u16) = relative type, d(u8) = storage
-    /// node_data: a(u32) = index of identifier, b(u32) = index of type
     /// node_data: a(u32) = index, b(u16) = count, c(u8) = storage
     declaration,
 
@@ -383,8 +392,19 @@ pub const Node = extern struct {
 
         var result = NodeRangeOrNode{ .none = {} };
         switch (self.kind) {
-            .int_literal => try writer.print("\x1b[1;35mIntLiteral\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.long}),
             .float_literal => try writer.print("\x1b[1;35mFloatLiteral\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.double}),
+            .double_literal => try writer.print("\x1b[1;35mDoubleLiteral\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.double}),
+            .int_literal => try writer.print("\x1b[1;35mIntLiteral\x1b[0m \x1b[32m(int)\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.long}),
+            .unsigned_int_literal => try writer.print("\x1b[1;35mIntLiteral\x1b[0m \x1b[32m(unsigned int)\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.long}),
+            .long_literal => try writer.print("\x1b[1;35mIntLiteral\x1b[0m \x1b[32m(long)\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.long}),
+            .unsigned_long_literal => try writer.print("\x1b[1;35mIntLiteral\x1b[0m \x1b[32m(unsigned long)\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.long}),
+            .long_long_literal => try writer.print("\x1b[1;35mIntLiteral\x1b[0m \x1b[32m(long long)\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.long}),
+            .unsigned_long_long_literal => try writer.print("\x1b[1;35mIntLiteral\x1b[0m \x1b[32m(unsigned long long)\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.long}),
+            .size_literal => try writer.print("\x1b[1;35mIntLiteral\x1b[0m \x1b[32m(ssize_t)\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.long}),
+            .unsigned_size_literal => try writer.print("\x1b[1;35mIntLiteral\x1b[0m \x1b[32m(size_t)\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.long}),
+            .string_literal => try writer.print("\x1b[1;35mStringLiteral\x1b[0m \x1b[1;33m\"{s}\"\x1b[0m", .{unit.stringAt(@bitCast(self.data.as(.two).a))}),
+            .stringified_literal => try writer.print("\x1b[1;35mStringifiedLiteral\x1b[0m \x1b[1;33m\"{s}\"\x1b[0m", .{unit.stringifiedAt(@bitCast(self.data.as(.two).a))}),
+            .char_literal => try writer.print("\x1b[1;35mCharLiteral\x1b[0m \x1b[1;33m'{c}'\x1b[0m", .{unit.charAt(@bitCast(self.data.as(.two).a))}),
             .declaration => {
                 const next_index = self.data.as(.two).a;
                 const count = self.data.as(.four).c;
@@ -993,6 +1013,13 @@ pub const Node = extern struct {
                 try writer.print("\x1b[1;35mIf\x1b[0m", .{});
                 result = NodeRangeOrNode.initNodes(&.{ condition, else_clause });
             },
+            .attribute => {
+                const token_start: TokenIndex = @bitCast(self.data.as(.two).a);
+                const token_count = self.data.as(.four).c;
+                const declaration = absoluteIndex(index, self.data.as(.four).d);
+                try writer.print("\x1b[1;35mAttribute\x1b[0m TokenIndex: {}:{}, Count: {}", .{ token_start.file_index, token_start.index, token_count });
+                result = NodeRangeOrNode.initNodes(&.{declaration});
+            },
             .empty_statement => {
                 try writer.print("\x1b[1;35mEmptyStatement\x1b[0m", .{});
             },
@@ -1148,22 +1175,99 @@ pub const Parser = struct {
         return try self.parseDeclaration(true);
     }
 
+    pub fn parseAttributeData(self: *Self) !NodeData {
+        var ptok: ?TokenResult = undefined;
+        self.nextToken();
+        _ = try self.expect(.open_paren);
+        _ = try self.expect(.open_paren);
+
+        ptok = self.peekToken();
+        const start_token = if (ptok != null)
+            ptok.?.index
+        else
+            @panic("Unexpcted end");
+
+        var indent: u32 = 0;
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.token.kind) {
+                .close_paren => {
+                    if (indent == 0) break else indent -= 1;
+                },
+                .open_paren => {
+                    indent += 1;
+                },
+                else => {},
+            }
+            self.nextToken();
+        }
+        const end_token = ptok.?.index;
+
+        var node_data: NodeData = undefined;
+        node_data.as(.two).a = @bitCast(start_token);
+        node_data.as(.four).c = @truncate(end_token.index - start_token.index);
+
+        _ = try self.expect(.close_paren);
+        _ = try self.expect(.close_paren);
+
+        return node_data;
+    }
+
     pub fn parseDeclaration(self: *Self, toplevel: bool) !NodeIndex {
         var storage_class: StorageClass.Type = 0;
 
         var ptok = self.peekToken();
-        if (ptok != null and ptok.?.token.kind == .static_assert) {
-            const result = try self.parseStaticAssert();
-            _ = try self.expect(.semicolon);
-            return result;
+        if (ptok != null) {
+            switch (ptok.?.token.kind) {
+                .static_assert => {
+                    const result = try self.parseStaticAssert();
+                    _ = try self.expect(.semicolon);
+                    return result;
+                },
+                .identifier => {
+                    const ident_str = self.unit.identifierAt(ptok.?.index);
+                    if (std.mem.startsWith(u8, ident_str, "__attribute")) {
+                        var attribute_data = try self.parseAttributeData();
+
+                        const declaration = try self.parseDeclaration(toplevel);
+                        attribute_data.as(.four).d = @truncate(self.relativeOffset(declaration));
+
+                        return try self.createNode(Node{
+                            .kind = .attribute,
+                            .data = attribute_data,
+                        });
+                    }
+                },
+                else => {},
+            }
         }
 
         const type_node = try self.parseDeclarationSpecifiers(&storage_class);
         ptok = self.peekToken();
 
+        var attribute_data: ?NodeData = null;
+
         var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
         defer these_nodes.deinit();
         while (ptok) |p| : (ptok = self.peekToken()) {
+            var front_attribute: ?NodeData = null;
+            switch (p.token.kind) {
+                .identifier => {
+                    const ident_str = self.unit.identifierAt(p.index);
+                    if (std.mem.startsWith(u8, ident_str, "__attribute")) {
+                        if (these_nodes.items.len == 0) {
+                            attribute_data = try self.parseAttributeData();
+                        } else {
+                            front_attribute = try self.parseAttributeData();
+                        }
+
+                        ptok = self.peekToken();
+
+                        // continue;
+                    }
+                },
+                else => {},
+            }
+            var node_to_append: NodeIndex = undefined;
             switch (p.token.kind) {
                 .semicolon => {
                     self.nextToken();
@@ -1175,6 +1279,16 @@ pub const Parser = struct {
                 else => {
                     var this_ident: ?TokenIndex = null;
                     const this_type = try self.parseDeclarator(type_node, &this_ident);
+                    ptok = self.peekToken();
+                    var this_attribute_data: ?NodeData = blk: {
+                        if (ptok != null and ptok.?.token.kind == .identifier) {
+                            const ident_str = self.unit.identifierAt(ptok.?.index);
+                            if (std.mem.startsWith(u8, ident_str, "__attribute")) {
+                                break :blk try self.parseAttributeData();
+                            }
+                        }
+                        break :blk null;
+                    };
 
                     if (this_type.is_function and !this_type.is_function_ptr) {
                         var decl_node_data: NodeData = undefined;
@@ -1186,17 +1300,30 @@ pub const Parser = struct {
                             decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type.node.?));
                             decl_node_data.as(.four).d = @truncate(self.relativeOffset(body));
 
-                            return try self.createNode(Node{
+                            const function_decl = try self.createNode(Node{
                                 .kind = .function_declaration_body,
                                 .data = decl_node_data,
                             });
+                            node_to_append = function_decl;
+                        } else {
+                            decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type.node.?));
+
+                            const function_decl = try self.createNode(Node{
+                                .kind = .function_declaration,
+                                .data = decl_node_data,
+                            });
+                            node_to_append = function_decl;
                         }
 
-                        decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type.node.?));
-                        try these_nodes.append(try self.createNode(Node{
-                            .kind = .function_declaration,
-                            .data = decl_node_data,
-                        }));
+                        if (this_attribute_data) |*tad| {
+                            attribute_data = tad.*;
+                        }
+
+                        if (front_attribute) |*fa| {
+                            attribute_data = fa.*;
+                        }
+
+                        try these_nodes.append(node_to_append);
                     } else {
                         if (this_ident == null) {
                             try these_nodes.append(this_type.node.?);
@@ -1220,10 +1347,29 @@ pub const Parser = struct {
 
                         decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type.node.?));
 
-                        try these_nodes.append(try self.createNode(Node{
+                        const decl = try self.createNode(Node{
                             .kind = kind,
                             .data = decl_node_data,
-                        }));
+                        });
+                        node_to_append = decl;
+
+                        if (this_attribute_data) |*tad| {
+                            tad.as(.four).d = self.relativeOffset(node_to_append);
+                            node_to_append = try self.createNode(Node{
+                                .kind = .attribute,
+                                .data = tad.*,
+                            });
+                        }
+
+                        if (front_attribute) |*fa| {
+                            fa.as(.four).d = self.relativeOffset(node_to_append);
+                            node_to_append = try self.createNode(Node{
+                                .kind = .attribute,
+                                .data = fa.*,
+                            });
+                        }
+
+                        try these_nodes.append(node_to_append);
                     }
                 },
             }
@@ -1255,7 +1401,15 @@ pub const Parser = struct {
             .data = decl_node_data,
         });
 
-        return decl_node;
+        if (attribute_data) |*data| {
+            data.as(.four).d = @truncate(self.relativeOffset(decl_node));
+            return try self.createNode(Node{
+                .kind = .attribute,
+                .data = data.*,
+            });
+        } else {
+            return decl_node;
+        }
     }
 
     pub fn parseDeclarationSpecifiers(self: *Self, storage_class: *StorageClass.Type) (ParseError || std.mem.Allocator.Error)!NodeIndex {
@@ -1400,6 +1554,8 @@ pub const Parser = struct {
             while (it.next()) |value| {
                 std.log.info("TypeName: \x1b[1;36m'{s}'\x1b[0m", .{value.key_ptr.*});
             }
+            std.log.info("File: {s}", .{self.unit.files.items[ptok.?.index.file_index].file_path});
+            std.log.info("Position: {}", .{self.unit.token(ptok.?.index)});
         }
         switch (type_kind.?) {
             .type_name, .atomic_type => {
@@ -1993,6 +2149,9 @@ pub const Parser = struct {
                         break;
                     }
                 },
+                .comma => {
+                    self.nextToken();
+                },
                 else => {
                     try these_nodes.append(try self.parseInitializer());
                 },
@@ -2352,7 +2511,7 @@ pub const Parser = struct {
 
                 _ = try self.expect(.semicolon);
                 return result;
-            }
+            },
         };
     }
 
@@ -2711,6 +2870,17 @@ pub const Parser = struct {
     pub fn parsePrimaryExpression(self: *Self) !NodeIndex {
         const ptok = self.peekToken() orelse @panic("EOF");
 
+        // float_literal,
+        // double_literal,
+        // int_literal,
+        // unsigned_int_literal,
+        // long_literal,
+        // unsigned_long_literal,
+        // long_long_literal,
+        // unsigned_long_long_literal,
+        // size_literal,
+        // unsigned_size_literal,
+
         const node = switch (ptok.token.kind) {
             .open_paren => {
                 self.nextToken();
@@ -2718,20 +2888,74 @@ pub const Parser = struct {
                 _ = try self.expect(.close_paren);
                 return result;
             },
-            .int_literal => Node{
-                .kind = .int_literal,
-                .data = .{
-                    .long = self.unit.ivalue(ptok.index),
-                },
-            },
             .float_literal => Node{
                 .kind = .float_literal,
                 .data = .{
                     .double = self.unit.fvalue(ptok.index),
                 },
             },
+            .double_literal => Node{
+                .kind = .float_literal,
+                .data = .{
+                    .double = self.unit.fvalue(ptok.index),
+                },
+            },
+            .int_literal => Node{
+                .kind = .int_literal,
+                .data = .{
+                    .long = self.unit.ivalue(ptok.index),
+                },
+            },
+            .unsigned_int_literal => Node{
+                .kind = .unsigned_int_literal,
+                .data = .{
+                    .long = self.unit.ivalue(ptok.index),
+                },
+            },
+            .long_literal => Node{
+                .kind = .long_literal,
+                .data = .{
+                    .long = self.unit.ivalue(ptok.index),
+                },
+            },
+            .unsigned_long_literal => Node{
+                .kind = .unsigned_long_literal,
+                .data = .{
+                    .long = self.unit.ivalue(ptok.index),
+                },
+            },
+            .long_long_literal => Node{
+                .kind = .long_long_literal,
+                .data = .{
+                    .long = self.unit.ivalue(ptok.index),
+                },
+            },
+            .unsigned_long_long_literal => Node{
+                .kind = .unsigned_long_long_literal,
+                .data = .{
+                    .long = self.unit.ivalue(ptok.index),
+                },
+            },
+            .size_literal => Node{
+                .kind = .size_literal,
+                .data = .{
+                    .long = self.unit.ivalue(ptok.index),
+                },
+            },
+            .unsigned_size_literal => Node{
+                .kind = .unsigned_size_literal,
+                .data = .{
+                    .long = self.unit.ivalue(ptok.index),
+                },
+            },
             .string_literal => Node{
                 .kind = .string_literal,
+                .data = .{
+                    .two = .{ .a = @bitCast(ptok.index), .b = 0 },
+                },
+            },
+            .stringified_literal => Node{
+                .kind = .stringified_literal,
                 .data = .{
                     .two = .{ .a = @bitCast(ptok.index), .b = 0 },
                 },
@@ -2910,8 +3134,8 @@ pub const Parser = struct {
     //             }
     //         },
 
-    inline fn relativeOffset(self: *Self, offset: u32) u32 {
-        return @as(u32, @truncate(self.unit.nodes.items.len)) - offset;
+    inline fn relativeOffset(self: *Self, offset: u32) u16 {
+        return @as(u16, @truncate(self.unit.nodes.items.len - offset));
     }
 
     fn createNode(self: *Self, node: Node) !NodeIndex {

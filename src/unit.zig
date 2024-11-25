@@ -67,7 +67,7 @@ pub const StringInterner = struct {
 
 pub const File = struct {
     file_path: []const u8,
-    source: []const u8,
+    source: []u8,
     tokens: std.ArrayList(Token),
 };
 
@@ -76,6 +76,7 @@ pub const Unit = struct {
     type_names: std.StringHashMap(void),
     files: std.ArrayList(File),
 
+    token_end_range: std.AutoHashMap(TokenIndex, u32),
     nodes: std.ArrayList(Node),
     node_ranges: std.ArrayList(NodeIndex),
 
@@ -86,7 +87,7 @@ pub const Unit = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, file_path: []const u8, source: []const u8) Self {
+    pub fn init(allocator: std.mem.Allocator, file_path: []const u8, source: []u8) Self {
         var files = std.ArrayList(File).init(allocator);
         files.append(.{
             .file_path = file_path,
@@ -102,6 +103,7 @@ pub const Unit = struct {
             .allocator = allocator,
             .files = files,
             .type_names = std.StringHashMap(void).init(allocator),
+            .token_end_range = std.AutoHashMap(TokenIndex, u32).init(allocator),
 
             .nodes = std.ArrayList(Node).init(allocator),
             .node_ranges = std.ArrayList(NodeIndex).init(allocator),
@@ -128,7 +130,7 @@ pub const Unit = struct {
         }) catch @panic("OOM");
     }
 
-    pub fn addFile(self: *Unit, file_path: []const u8, source: []const u8) FileIndex {
+    pub fn addFile(self: *Unit, file_path: []const u8, source: []u8) FileIndex {
         const index: FileIndex = @truncate(self.files.items.len);
         self.files.append(File{
             .file_path = self.allocator.dupe(u8, file_path) catch @panic("OOM"),
@@ -192,25 +194,139 @@ pub const Unit = struct {
         return self.files.items[start.file_index].tokens.items[start.index .. start.index + count];
     }
 
+    pub fn tokenSourceSlice(self: *Unit, tidx: TokenIndex) []const u8 {
+        const source = self.files.items[tidx.file_index].source;
+        const length = self.tokenLength(tidx);
+        const tok = self.token(tidx);
+        return source[tok.start .. tok.start + length];
+    }
+
+    pub fn tokenLength(self: *Unit, tidx: TokenIndex) u32 {
+        const source = self.files.items[tidx.file_index].source;
+        const tok = self.token(tidx);
+        var index: u32 = tok.start;
+
+        switch (tok.kind) {
+            .float_literal,
+            .double_literal,
+            .int_literal,
+            .unsigned_int_literal,
+            .long_literal,
+            .unsigned_long_literal,
+            .long_long_literal,
+            .unsigned_long_long_literal,
+            .size_literal,
+            .unsigned_size_literal,
+            => {
+                const IS_FLOAT: u8 = (1 << 0);
+                const DID_DOT: u8 = (1 << 1);
+                const DID_E: u8 = (1 << 2);
+                var base: u8 = if (source[0] == '0') 8 else 10;
+                var flags: u8 = 0;
+                while (index < source.len) : (index += 1) doneLit: {
+                    switch (source[index]) {
+                        '\'', '_' => continue,
+                        '.' => {
+                            if ((flags & DID_DOT) > 0) break :doneLit;
+
+                            flags |= DID_DOT;
+                            flags |= IS_FLOAT;
+                        },
+                        'e' => {
+                            if ((flags & DID_E) > 0) break :doneLit;
+
+                            flags |= DID_E;
+                            flags |= IS_FLOAT;
+                        },
+                        'b', 'B' => |x| {
+                            if (base == 8 and index == 1) {
+                                base = 2;
+                            } else if (base > 10 and 1 < base - 10) {
+                                continue;
+                            } else {
+                                std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
+                            }
+                        },
+                        'x', 'X' => |x| {
+                            if (base == 8 and index == 1) {
+                                base = 16;
+                            } else {
+                                std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
+                            }
+                        },
+                        '0' => continue,
+                        '1'...'9' => |x| if (x - '0' < base) {
+                            continue;
+                        } else {
+                            std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
+                        },
+                        'a', 'c', 'd', 'f'...'k' => |x| if (x - 'a' < base - 10) {
+                            continue;
+                        } else if (x == 'f' and (flags & IS_FLOAT) > 0) {
+                            break;
+                        } else {
+                            std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
+                        },
+                        'A', 'C', 'D', 'F'...'K' => |x| if (x - 'A' < base - 10) {
+                            continue;
+                        } else if (x == 'F' and (flags & IS_FLOAT) > 0) {
+                            break;
+                        } else {
+                            std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
+                        },
+                        else => break,
+                    }
+                }
+
+                var unsigned = false;
+                var long = false;
+                while (index < source.len) : (index += 1) {
+                    switch (source[index]) {
+                        'f' => {
+                            index += 1;
+                            break;
+                        },
+                        'u' => {
+                            if (long) break;
+                            index += 1;
+                            unsigned = true;
+                        },
+                        'z', 'Z' => {
+                            if (long) break;
+                            index += 1;
+                            break;
+                        },
+                        'l', 'L' => {
+                            if (long) {
+                                index += 1;
+                                break;
+                            } else {
+                                long = true;
+                            }
+                        },
+                        else => break,
+                    }
+                }
+            },
+            else => {},
+        }
+
+        return index - tok.start;
+    }
+
     pub fn ivalue(self: *const Unit, tidx: TokenIndex) u64 {
         const tok = self.token(tidx);
         const source = self.files.items[tidx.file_index].source;
+        const include_to_index = self.token_end_range.get(tidx);
         var index = tok.start;
         var sum: u64 = 0;
-        // while (index < source.len) : (index += 1) {
-        //     switch (source[index]) {
-        //         '0'...'9' => |c| {
-        //             sum *= 10;
-        //             sum += @as(u64, c - '0');
-        //         },
-        //         else => break,
-        //     }
-        // }
 
         const start = index;
         var base: u8 = if (source[index] == '0') 8 else 10;
         while (index < source.len) : (index += 1) {
             switch (source[index]) {
+                ' ', '\t', '#' => if (include_to_index == null or index >= include_to_index.?) break,
+                '\'', '_' => continue,
                 'b', 'B' => {
                     if (base == 8 and index == start + 1) {
                         base = 2;
@@ -314,6 +430,25 @@ pub const Unit = struct {
         return source[tok.start + 1 .. index];
     }
 
+    pub fn stringifiedAt(self: *const Self, tidx: TokenIndex) []const u8 {
+        const tok = self.token(tidx);
+        const source = self.files.items[tidx.file_index].source;
+        var index = tok.start;
+        var indent: u32 = 0;
+        while (index < source.len) : (index += 1) {
+            switch (source[index]) {
+                '(' => indent += 1,
+                ')' => if (indent == 0) break else {
+                    indent -= 1;
+                },
+                ',' => if (indent == 0) break,
+                else => {},
+            }
+        }
+
+        return source[tok.start..index];
+    }
+
     pub fn charAt(self: *const Self, tidx: TokenIndex) u8 {
         const tok = self.token(tidx);
         const source = self.files.items[tidx.file_index].source;
@@ -355,19 +490,19 @@ pub const Unit = struct {
         return c.?;
     }
 
-    pub fn identifier(self: *const Unit, tidx: TokenIndex) []const u8 {
-        const tok = self.token(tidx);
-        const source = self.files.items[tidx.file_index].source;
-        var index = tok.start;
-        while (index < source.len) : (index += 1) {
-            switch (source[index]) {
-                'a'...'z', 'A'...'Z', '_', '0'...'9' => continue,
-                else => break,
-            }
-        }
+    // pub fn identifier(self: *const Unit, tidx: TokenIndex) []const u8 {
+    //     const tok = self.token(tidx);
+    //     const source = self.files.items[tidx.file_index].source;
+    //     var index = tok.start;
+    //     while (index < source.len) : (index += 1) {
+    //         switch (source[index]) {
+    //             'a'...'z', 'A'...'Z', '_', '0'...'9' => continue,
+    //             else => break,
+    //         }
+    //     }
 
-        return source[tok.start..index];
-    }
+    //     return source[tok.start..index];
+    // }
 
     pub fn ppDirective(self: *const Unit, tidx: TokenIndex) []const u8 {
         const tok = self.token(tidx);
