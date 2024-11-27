@@ -169,6 +169,7 @@ pub const TokenKind = enum(u32) {
             .tilde => "~",
             .colon => ":",
             .question => "?",
+            .ellipsis => "...",
 
             .assignment => "=",
             .plus_eq => "+=",
@@ -286,11 +287,13 @@ pub const TokenIndex = packed struct(u32) {
 pub const TokenRange = struct {
     start: TokenIndex,
     end: TokenIndex,
+    data: i16 = -1,
     flags: Flags.Type,
 
     pub const Flags = struct {
         pub const Type = u8;
         pub const EXPANSION_ARGUMENTS: Type = (1 << 0);
+        pub const EXPANSION_DEPTH: Type = (1 << 1);
     };
 
     /// Creates a range from an inclusive end token index and a count of tokens
@@ -372,9 +375,17 @@ pub const FileTokenizer = struct {
             if ((item_index.flags & TokenRange.Flags.EXPANSION_ARGUMENTS) > 0) {
                 self.tokenizer.expansion_stack.items.len -= 1;
             }
+
+            if ((item_index.flags & TokenRange.Flags.EXPANSION_DEPTH) > 0) {
+                self.tokenizer.expansion_depth -= 1;
+            }
         }
 
         return null;
+    }
+
+    pub inline fn currentRangeData(self: *Self) i16 {
+        return self.tokenizer.virtual_stack.getLast().data;
     }
 
     pub fn backVirtual(self: *Self) void {
@@ -388,7 +399,11 @@ pub const FileTokenizer = struct {
     fn expandIdentifier(self: *Self, idx: TokenIndex, start_token: *Token) ?Argument {
         var ident_str = self.tokenizer.unit.identifierAt(idx);
 
-        var expanded_range: Argument = self.searchNthExpansionArg(0, ident_str) orelse @panic("Expected macro parameter for stringification");
+        var expanded_range: Argument = self.searchNthExpansionArg(0, ident_str) orelse {
+            return null;
+            // std.log.err("{s}, pos: {}", .{ self.tokenizer.unit.filePos(idx)[0], self.tokenizer.unit.filePos(idx)[1] });
+            // std.debug.panic("Expected macro parameter for stringification", .{});
+        };
         var single_ident = expanded_range.expandSingleIdentifier() orelse {
             start_token.* = self.tokenizer.unit.token(expanded_range.tokens[0].start);
             return expanded_range;
@@ -431,6 +446,7 @@ pub const FileTokenizer = struct {
     pub fn resolveVirtual(self: *Self, last_token: ?TokenIndex, copy_source_index: ?u32) ?TokenIndex {
         const tidx = self.nextVirtual() orelse return last_token;
         const token = self.tokenizer.unit.token(tidx);
+        const rng_data = self.currentRangeData();
 
         return switch (token.kind) {
             .identifier => {
@@ -440,7 +456,7 @@ pub const FileTokenizer = struct {
                 }
 
                 const ident_str = self.tokenizer.unit.identifierAt(tidx);
-                if (self.checkExpansion(ident_str)) {
+                if (self.checkExpansion(ident_str, if (rng_data >= 0) @intCast(rng_data) else null)) {
                     return self.resolveVirtual(null, null);
                 }
 
@@ -452,7 +468,10 @@ pub const FileTokenizer = struct {
                 if (next_token.kind != .identifier) @panic("Expected macro parameter for stringification");
 
                 var start_token: Token = undefined;
-                const expanded_range = self.expandIdentifier(next_tidx.?, &start_token).?;
+                const expanded_range = self.expandIdentifier(next_tidx.?, &start_token) orelse {
+                    std.log.err("{s}, pos: {}", .{ self.tokenizer.unit.filePos(next_tidx.?)[0], self.tokenizer.unit.filePos(next_tidx.?)[1] });
+                    std.debug.panic("Expected macro parameter for stringification", .{});
+                };
 
                 const new_token = Token{
                     .kind = .stringified_literal,
@@ -471,44 +490,77 @@ pub const FileTokenizer = struct {
             },
             .hashhash => {
                 const last_tok = self.tokenizer.unit.token(last_token.?);
-                const next_tidx = self.nextVirtual();
-                const next_token = self.tokenizer.unit.token(next_tidx.?);
+                var next_tidx = self.nextVirtual();
+                var next_token = self.tokenizer.unit.token(next_tidx.?);
+
+                var start_token: Token = undefined;
+                const expanded_range = self.expandIdentifier(next_tidx.?, &start_token);
+                if (expanded_range) |er| {
+                    next_tidx = er.tokens[0].start;
+                    next_token = start_token;
+                }
 
                 var new_token = Token{
                     .kind = undefined,
                     .start = last_tok.start,
                 };
 
-                const new_token_idx = self.tokenizer.unit.files.items[last_token.?.file_index].tokens.items.len;
+                const new_token_idx = self.tokenizer.unit.files.items[self.file_index].tokens.items.len;
 
                 const new_idx = TokenIndex{
                     .index = @truncate(new_token_idx),
-                    .file_index = last_token.?.file_index,
+                    .file_index = self.file_index,
                 };
 
-                if (next_token.kind.isIntLiteral() and last_tok.kind.isIntLiteral()) {
-                    if (copy_source_index) |csi| {
-                        const next_tok_slice = self.tokenizer.unit.tokenSourceSlice(next_tidx.?);
-                        new_token.start = csi;
-                        const src_len = self.source.len;
-                        self.source = self.tokenizer.allocator.realloc(self.source, self.source.len + next_tok_slice.len) catch @panic("OOM");
-                        self.tokenizer.unit.files.items[self.file_index].source = self.source;
+                // var last_tok_slice: []const u8 = undefined;
+                // var next_tok_slice: []const u8 = undefined;
+                const last_tok_slice = self.tokenizer.unit.tokenSourceSlice(last_token.?);
+                const next_tok_slice = self.tokenizer.unit.tokenSourceSlice(next_tidx.?);
 
-                        @memcpy(self.source[src_len .. src_len + next_tok_slice.len], next_tok_slice);
-                    } else {
-                        const last_tok_slice = self.tokenizer.unit.tokenSourceSlice(last_token.?);
-                        const next_tok_slice = self.tokenizer.unit.tokenSourceSlice(next_tidx.?);
-                        new_token.start = @truncate(self.source.len);
-                        self.source = self.tokenizer.allocator.realloc(self.source, self.source.len + last_tok_slice.len + next_tok_slice.len) catch @panic("OOM");
-                        self.tokenizer.unit.files.items[self.file_index].source = self.source;
-                        @memcpy(self.source[new_token.start .. new_token.start + last_tok_slice.len], last_tok_slice);
-                        @memcpy(self.source[new_token.start + last_tok_slice.len .. new_token.start + last_tok_slice.len + next_tok_slice.len], next_tok_slice);
+                blk: {
+                    if (last_tok.kind.isIntLiteral()) {
+                        if (next_token.kind.isIntLiteral()) {
+                            new_token.kind = next_token.kind;
+                            break :blk;
+                        } else if (next_token.kind == .identifier) {
+                            new_token.kind = last_tok.kind;
+                            break :blk;
+                        }
+                    } else if (last_tok.kind == .identifier) {
+                        if (next_token.kind.isIntLiteral()) {
+                            new_token.kind = last_tok.kind;
+                            break :blk;
+                        } else if (next_token.kind == .identifier) {
+                            new_token.kind = last_tok.kind;
+                            break :blk;
+                        }
                     }
-
-                    new_token.kind = next_token.kind;
+                    std.debug.panic("Unsupported concatenated token!", .{});
                 }
 
-                self.tokenizer.unit.files.items[last_token.?.file_index].tokens.append(new_token) catch @panic("OOM");
+                if (copy_source_index) |csi| {
+                    new_token.start = csi;
+                    const src_len = self.source.len;
+                    self.source = self.tokenizer.allocator.realloc(self.source, self.source.len + next_tok_slice.len) catch @panic("OOM");
+                    self.tokenizer.unit.files.items[self.file_index].source = self.source;
+
+                    @memcpy(self.source[src_len .. src_len + next_tok_slice.len], next_tok_slice);
+                } else {
+                    new_token.start = @truncate(self.source.len);
+                    self.source = self.tokenizer.allocator.realloc(self.source, self.source.len + last_tok_slice.len + next_tok_slice.len) catch @panic("OOM");
+                    self.tokenizer.unit.files.items[self.file_index].source = self.source;
+                    @memcpy(self.source[new_token.start .. new_token.start + last_tok_slice.len], last_tok_slice);
+                    @memcpy(self.source[new_token.start + last_tok_slice.len .. new_token.start + last_tok_slice.len + next_tok_slice.len], next_tok_slice);
+                }
+
+                self.tokenizer.unit.files.items[self.file_index].tokens.append(new_token) catch @panic("OOM");
+
+                if (new_token.kind == .identifier) {
+                    const ident_str = self.tokenizer.unit.identifierAt(new_idx);
+                    if (self.checkExpansion(ident_str, null)) {
+                        return null;
+                    }
+                }
 
                 return self.resolveVirtual(new_idx, new_token.start);
             },
@@ -545,6 +597,7 @@ pub const FileTokenizer = struct {
                         if (self.pos + 1 < self.source_len) {
                             if (self.source[self.pos + 1] == '/') {
                                 while (self.isNot(0, '\n')) : (self.pos += 1) {}
+                                if (eol) return true;
                             } else if (self.source[self.pos + 1] == '*') {
                                 self.pos += 1;
                                 while (self.isNot(0, '*') or self.isNot(1, '/')) : (self.pos += 1) {}
@@ -628,6 +681,7 @@ pub const FileTokenizer = struct {
                     if (self.pos + 1 < self.source_len) {
                         if (self.source[self.pos + 1] == '/') {
                             while (self.isNot(0, '\n')) : (self.pos += 1) {}
+                            return true;
                         } else if (self.source[self.pos + 1] == '*') {
                             self.pos += 1;
                             while (self.isNot(0, '*') or self.isNot(1, '/')) : (self.pos += 1) {}
@@ -668,13 +722,13 @@ pub const FileTokenizer = struct {
     }
 
     /// Reverse search of macro function arguments
-    fn searchExpansionArg(self: *Self, arg: []const u8) ?Argument {
+    fn searchExpansionArg(self: *Self, arg: []const u8) ?struct { Argument, u32 } {
         if (self.tokenizer.expansion_stack.items.len == 0) return null;
         var index = self.tokenizer.expansion_stack.items.len;
         while (index > 0) {
             index -= 1;
-            if (self.tokenizer.expansion_stack.items[index].get(arg)) |value| {
-                return value;
+            if (self.tokenizer.expansion_stack.items[index].map.get(arg)) |value| {
+                return .{ value, @truncate(index) };
             }
         }
 
@@ -689,7 +743,7 @@ pub const FileTokenizer = struct {
         // TODO: do we need last found at all?
         // var last_found: ?Argument = null;
         while (index >= 0) : (index -= 1) {
-            if (self.tokenizer.expansion_stack.items[@as(usize, @intCast(index))].get(arg)) |value| {
+            if (self.tokenizer.expansion_stack.items[@as(usize, @intCast(index))].map.get(arg)) |value| {
                 if (nn == 0) return value;
                 nn -= 1;
                 // last_found = value;
@@ -730,12 +784,17 @@ pub const FileTokenizer = struct {
     ///     - define object
     ///     - define function
     /// and pushes virtual tokens onto the stack, then returns true if was one of the above.
-    fn checkExpansion(self: *Self, str: []const u8) bool {
-        if (self.searchExpansionArg(str)) |value| {
-            var i = value.tokens.len;
+    fn checkExpansion(self: *Self, str: []const u8, expansion_index: ?u32) bool {
+        if (self.searchExpansionArg(str)) |value| blk: {
+            if (expansion_index) |ei| {
+                if (ei == value[1]) break :blk;
+            }
+            var i = value[0].tokens.len;
             while (i > 0) {
                 i -= 1;
-                self.tokenizer.pushVirtual(value.tokens[i]);
+                var rng = value[0].tokens[i];
+                rng.data = @intCast(value[1]);
+                self.tokenizer.pushVirtual(rng);
             }
 
             return true;
@@ -748,8 +807,16 @@ pub const FileTokenizer = struct {
             return true;
         }
 
-        if (self.tokenizer.unit.define_fns.get(str)) |def| {
-            const open_paren_index = self.expect(.open_paren);
+        if (self.tokenizer.unit.define_fns.get(str)) |def| blk: {
+            const open_paren_index = blk1: {
+                const pidx = self.tokenizer.peek(false);
+                if (pidx == null or self.tokenizer.unit.token(pidx.?).kind != .open_paren) {
+                    break :blk;
+                }
+                break :blk1 self.tokenizer.next(false).?;
+            };
+
+            // const open_paren_index = self.expect(.open_paren);
 
             var argument_map = ArgumentMap.init(self.tokenizer.allocator);
             var va_map = if (def.var_arg) std.ArrayList(Argument).init(self.tokenizer.allocator) else undefined;
@@ -777,14 +844,14 @@ pub const FileTokenizer = struct {
                                         range_count = 0;
                                     }
 
-                                const arg = Argument{
-                                    .tokens = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM"),
-                                };
-                                if (parameter_iter.next()) |param| {
-                                    argument_map.put(param.key_ptr.*, arg) catch @panic("OOM");
-                                } else if (def.var_arg) {
-                                    va_map.append(arg) catch @panic("OOM");
-                                } else @panic("TODO: parameter arg mismatch");
+                                    const arg = Argument{
+                                        .tokens = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM"),
+                                    };
+                                    if (parameter_iter.next()) |param| {
+                                        argument_map.put(param.key_ptr.*, arg) catch @panic("OOM");
+                                    } else if (def.var_arg) {
+                                        va_map.append(arg) catch @panic("OOM");
+                                    } else @panic("TODO: parameter arg mismatch");
                                 }
                                 break :blk1;
                             }
@@ -850,13 +917,18 @@ pub const FileTokenizer = struct {
             //     }
             // }
 
-            self.tokenizer.expansion_stack.append(argument_map) catch @panic("OOM");
-
             if (def.range.start.index < def.range.end.index) {
+                self.tokenizer.expansion_stack.append(ExpansionArgumentMap{
+                    .map = argument_map,
+                    .depth = self.tokenizer.expansion_depth,
+                }) catch @panic("OOM");
+
+                self.tokenizer.expansion_depth += 1;
+
                 self.tokenizer.pushVirtual(TokenRange{
                     .start = def.range.start,
                     .end = def.range.end,
-                    .flags = TokenRange.Flags.EXPANSION_ARGUMENTS,
+                    .flags = TokenRange.Flags.EXPANSION_ARGUMENTS | TokenRange.Flags.EXPANSION_DEPTH,
                 });
             }
 
@@ -890,14 +962,19 @@ pub const FileTokenizer = struct {
                                 flags |= DID_DOT;
                                 flags |= IS_FLOAT;
                             },
-                            'e' => {
+                            'e', 'E' => {
+                                if ((flags & IS_FLOAT) == 0 and base == 16) {
+                                    continue;
+                                }
                                 if ((flags & DID_E) > 0) break :doneLit;
 
                                 flags |= DID_E;
                                 flags |= IS_FLOAT;
                             },
                             'b', 'B' => |x| {
-                                if (base == 8 and self.pos == start + 1) {
+                                if ((flags & IS_FLOAT) > 0) {
+                                    continue;
+                                } else if (base == 8 and self.pos == start + 1) {
                                     base = 2;
                                 } else if (base > 10 and 1 < base - 10) {
                                     continue;
@@ -906,28 +983,33 @@ pub const FileTokenizer = struct {
                                 }
                             },
                             'x', 'X' => |x| {
-                                if (base == 8 and self.pos == start + 1) {
+                                if ((flags & IS_FLOAT) > 0) {
+                                    continue;
+                                } else if (base == 8 and self.pos == start + 1) {
                                     base = 16;
                                 } else {
                                     std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
                                 }
                             },
                             '0' => continue,
-                            '1'...'9' => |x| if (x - '0' < base) {
+                            '1'...'9' => |x| if ((flags & IS_FLOAT) > 0) {
+                                continue;
+                            } else if (x - '0' < base) {
                                 continue;
                             } else {
                                 std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
                             },
-                            'a', 'c', 'd', 'f'...'k' => |x| if (x - 'a' < base - 10) {
+                            'a', 'c', 'd', 'f'...'k' => |x| if (base > 10 and x - 'a' < base - 10) {
                                 continue;
-                            } else if (x == 'f' and (flags & IS_FLOAT) > 0) {
+                            } else if (x == 'f') {
+                                flags |= IS_FLOAT;
                                 break;
                             } else {
                                 std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
                             },
-                            'A', 'C', 'D', 'F'...'K' => |x| if (x - 'A' < base - 10) {
+                            'A', 'C', 'D', 'F'...'K' => |x| if (base > 10 and x - 'A' < base - 10) {
                                 continue;
-                            } else if (x == 'F' and (flags & IS_FLOAT) > 0) {
+                            } else if (x == 'F') {
                                 break;
                             } else {
                                 std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
@@ -944,9 +1026,8 @@ pub const FileTokenizer = struct {
                                 self.pos += 1;
                                 break :blk TokenKind.float_literal;
                             },
-                            'u' => {
+                            'u', 'U' => {
                                 if (long) break;
-                                self.pos += 1;
                                 unsigned = true;
                             },
                             'z', 'Z' => {
@@ -1085,7 +1166,12 @@ pub const FileTokenizer = struct {
                     self.pos += 1;
                     while (self.pos < self.source_len) : (self.pos += 1) {
                         switch (self.source[self.pos]) {
-                            '"' => break,
+                            '"' => {
+                                if (self.source[self.pos - 1] == '\\') {
+                                    std.log.debug("String escape", .{});
+                                    continue;
+                                } else break;
+                            },
                             else => {},
                         }
                     }
@@ -1094,9 +1180,15 @@ pub const FileTokenizer = struct {
                 },
                 '\'' => {
                     self.pos += 1;
+                    var last_slash = false;
                     while (self.pos < self.source_len) : (self.pos += 1) {
                         switch (self.source[self.pos]) {
-                            '\'' => break,
+                            '\'' => {
+                                if (last_slash and self.source[self.pos - 1] == '\\') continue else break;
+                            },
+                            '\\' => {
+                                last_slash = !last_slash;
+                            },
                             else => {},
                         }
                     }
@@ -1132,8 +1224,12 @@ pub const FileTokenizer = struct {
                     }
                     const str = self.source[start..self.pos];
 
+                    if (std.mem.eql(u8, str, "PFNGLCREATEBUFFERSPROC")) {
+                        std.log.debug("PFNGLCREATEBUFFERSPROC", .{});
+                    }
+
                     if (!self.tokenizer.in_define) {
-                        if (self.checkExpansion(str)) {
+                        if (self.checkExpansion(str, null)) {
                             return null;
                         }
                     }
@@ -1178,7 +1274,6 @@ pub const FileTokenizer = struct {
                     if (self.tokenizer.in_define and directive_str.len == 0) {
                         break :blk .hash;
                     } else if (std.mem.eql(u8, directive_str, "#")) {
-                        self.pos += 1;
                         break :blk .hashhash;
                         // const last_token = self.last_token orelse @panic("Expected token before this one!");
 
@@ -1194,6 +1289,10 @@ pub const FileTokenizer = struct {
                         }
 
                         const define_name = self.tokenizer.unit.token(first_token.?);
+                        if (define_name.kind == .bool) {
+                            while (self.tokenizer.next(true)) |_| {}
+                            return null;
+                        }
                         std.debug.assert(define_name.kind == .identifier);
                         const define_str = self.tokenizer.unit.identifierAt(first_token.?);
                         var var_arg = false;
@@ -1256,7 +1355,7 @@ pub const FileTokenizer = struct {
                                         .index = pidx.index + @as(TokenIndexType, @truncate(count)),
                                         .file_index = pidx.file_index,
                                     },
-                                    .flags = 0,
+                                    .flags = TokenRange.Flags.EXPANSION_ARGUMENTS,
                                 },
                                 .var_arg = var_arg,
                                 .parameters = parameter_map,
@@ -1578,18 +1677,24 @@ pub const FileTokenizer = struct {
     }
 };
 
+const ExpansionArgumentMap = struct {
+    map: ArgumentMap,
+    depth: u32,
+};
+
 /// Tokenizer for unit. The creates FileTokenizers when needed and pops them onto a stack.
 /// The next token comes first from the top of the stack
 pub const Tokenizer = struct {
     allocator: std.mem.Allocator,
     unit: *Unit,
-    file_stack: std.ArrayList(FileTokenizer),
+    file_stack: std.SinglyLinkedList(FileTokenizer),
 
     virtual_stack: std.ArrayList(TokenRange),
-    expansion_stack: std.ArrayList(ArgumentMap),
+    expansion_stack: std.ArrayList(ExpansionArgumentMap),
     if_stack: std.BitStack,
     peeked_token: ?TokenIndex = null,
     in_define: bool = false,
+    expansion_depth: u32 = 0,
 
     conditional_skip: bool = false,
 
@@ -1599,24 +1704,27 @@ pub const Tokenizer = struct {
         return .{
             .allocator = allocator,
             .unit = unit,
-            .file_stack = std.ArrayList(FileTokenizer).init(allocator),
+            .file_stack = std.SinglyLinkedList(FileTokenizer){},
             .virtual_stack = std.ArrayList(TokenRange).init(allocator),
-            .expansion_stack = std.ArrayList(ArgumentMap).init(allocator),
+            .expansion_stack = std.ArrayList(ExpansionArgumentMap).init(allocator),
             .if_stack = std.BitStack.init(allocator),
         };
     }
 
     /// Create a new file on the stack.
     pub fn initFile(self: *Self, file_index: FileIndexType) *FileTokenizer {
-        const file_tok = self.file_stack.addOne() catch @panic("OOM");
-        file_tok.* = .{
+        // const file_tok = self.file_stack.addOne() catch @panic("OOM");
+
+        var node = self.allocator.create(std.SinglyLinkedList(FileTokenizer).Node) catch @panic("OOM");
+        self.file_stack.prepend(node);
+        node.data = .{
             .tokenizer = self,
             .source = self.unit.files.items[file_index].source,
             .source_len = @truncate(self.unit.files.items[file_index].source.len),
             .file_index = file_index,
         };
 
-        return file_tok;
+        return &node.data;
     }
 
     /// Add virtual tokens to the virtual token stack
@@ -1631,7 +1739,8 @@ pub const Tokenizer = struct {
 
     /// Returns the top of the file stack
     inline fn currentFile(self: *Self) *FileTokenizer {
-        return &self.file_stack.items[self.file_stack.items.len - 1];
+        // return &self.file_stack.items[self.file_stack.items.len - 1];
+        return &self.file_stack.first.?.data;
     }
 
     /// Pops the top of the virtual token stack and returns the value.
@@ -1665,20 +1774,23 @@ pub const Tokenizer = struct {
     /// This should probably only be used internally (i don't know of a use case otherwise).
     /// eol: if true, only tokenize to the end of the current line stops right before \n
     pub fn rawNext(self: *Self, eol: bool) ?TokenIndex {
-        while (self.file_stack.items.len > 0) {
+        while (self.file_stack.first != null) {
             var file = self.currentFile();
             if (file.next(eol)) |result| {
                 return result;
             } else if (eol) {
+                self.in_define = false;
                 return null;
             } else if (file.included_file) {
                 file.included_file = false;
                 continue;
             }
-            if (self.file_stack.items.len > 0) {
+            if (self.file_stack.first != null) {
                 file = self.currentFile(); // This might change when calling next
                 if (file.pos >= file.source_len) {
-                    self.file_stack.items.len -= 1;
+                    // self.file_stack.items.len -= 1;
+                    _ = self.file_stack.popFirst();
+
                     self.in_define = false;
                     self.conditional_skip = false;
                 }
@@ -1746,28 +1858,40 @@ const SimpleExpressionEvaluator = struct {
                     // 140 is the precedence of defined
                     if (140 >= last_prec and std.mem.eql(u8, self.unit.identifierAt(op.?.index), "defined")) {
                         self.next();
+
+                        const old_in_define = self.tokenizer.in_define;
+                        defer self.tokenizer.in_define = old_in_define;
+                        self.tokenizer.in_define = true;
+
                         op = self.peek();
                         if (op != null and op.?.token.kind == .open_paren) {
                             self.next();
-                            const old_in_define = self.tokenizer.in_define;
-                            defer self.tokenizer.in_define = old_in_define;
-                            self.tokenizer.in_define = true;
                             op = self.peek();
-                            if (op != null and op.?.token.kind != .identifier) {
-                                std.log.err("Founded token {}, file: {s}, pos: {}", .{ op.?.token.kind, self.unit.files.items[op.?.index.file_index].file_path, self.unit.token(op.?.index).start });
-                                return error.UnexpectedToken;
+                            if (op == null) {
+                                return error.UnexpectedEnd;
                             }
-                            self.next();
-                            const ident_str = self.unit.identifierAt(op.?.index);
+                            switch (op.?.token.kind) {
+                                .identifier => {
+                                    self.next();
+                                    const ident_str = self.unit.identifierAt(op.?.index);
 
-                            if (self.unit.defines.contains(ident_str) or self.unit.define_fns.contains(ident_str)) {
-                                left = .{ .int_value = 1 };
-                            } else {
-                                left = .{ .int_value = 0 };
+                                    if (self.unit.defines.contains(ident_str) or self.unit.define_fns.contains(ident_str)) {
+                                        left = .{ .int_value = 1 };
+                                    } else {
+                                        left = .{ .int_value = 0 };
+                                    }
+                                },
+
+                                .unsigned, .signed, .char, .short, .int, .long, .float, .double, .bool => {
+                                    self.next();
+                                    left = .{ .int_value = 1 };
+                                },
+                                else => std.log.err("Founded token {}, file: {s}, pos: {}", .{ op.?.token.kind, self.unit.files.items[op.?.index.file_index].file_path, self.unit.token(op.?.index).start }),
                             }
                             try self.expect(.close_paren);
                         } else {
                             if (op != null and op.?.token.kind != .identifier) {
+                                std.log.err("Founded token {}, file: {s}, pos: {}", .{ op.?.token.kind, self.unit.files.items[op.?.index.file_index].file_path, self.unit.token(op.?.index).start });
                                 return error.UnexpectedToken;
                             }
                             self.next();
@@ -1809,6 +1933,27 @@ const SimpleExpressionEvaluator = struct {
         while (true) {
             op = self.peek();
             if (op == null) break;
+            if (op.?.token.kind == .open_paren) {
+                self.next();
+                op = self.peek();
+                var indent: u32 = 0;
+                while (op) |p| : (op = self.peek()) {
+                    switch (p.token.kind) {
+                        .open_paren => indent += 1,
+                        .close_paren => {
+                            if (indent == 0) {
+                                self.next();
+                                break;
+                            }
+                            indent -= 1;
+                        },
+                        else => {},
+                    }
+                    self.next();
+                }
+                left = .{ .int_value = 0 };
+                continue;
+            }
             const prec = binaryPrecedence(&op.?.token);
 
             if (prec <= last_prec or prec == 0) {

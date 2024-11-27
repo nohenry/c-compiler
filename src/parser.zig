@@ -1448,7 +1448,10 @@ pub const Parser = struct {
                     self.nextToken();
                     break;
                 },
-                else => std.debug.panic("TODO: unexpected token {}", .{ptok.?.token.kind}),
+                else => {
+                    std.log.err("{s}, pos: {}", .{self.tokenizer.unit.filePos(ptok.?.index)[0], self.tokenizer.unit.filePos(ptok.?.index)[1]});
+                    std.debug.panic("TODO: unexpected token {}", .{ptok.?.token.kind});
+                },
             }
         }
 
@@ -2082,7 +2085,7 @@ pub const Parser = struct {
         var ptok = self.peekToken();
         while (ptok) |p| : (ptok = self.peekToken()) {
             switch (p.token.kind) {
-                .open_brace => {
+                .close_brace => {
                     break;
                 },
                 .identifier => {

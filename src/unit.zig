@@ -87,13 +87,13 @@ pub const Unit = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, file_path: []const u8, source: []u8) Self {
-        var files = std.ArrayList(File).init(allocator);
-        files.append(.{
-            .file_path = file_path,
-            .source = source,
-            .tokens = std.ArrayList(Token).init(allocator),
-        }) catch @panic("OOM");
+    pub fn init(allocator: std.mem.Allocator) Self {
+        const files = std.ArrayList(File).init(allocator);
+        // files.append(.{
+        //     .file_path = file_path,
+        //     .source = source,
+        //     .tokens = std.ArrayList(Token).init(allocator),
+        // }) catch @panic("OOM");
 
         var include_dirs = std.ArrayList([]const u8).init(allocator);
         include_dirs.append("/opt/homebrew/Cellar/llvm/18.1.7/lib/clang/18/include") catch @panic("OOM");
@@ -204,6 +204,7 @@ pub const Unit = struct {
     pub fn tokenLength(self: *Unit, tidx: TokenIndex) u32 {
         const source = self.files.items[tidx.file_index].source;
         const tok = self.token(tidx);
+        const start = tok.start;
         var index: u32 = tok.start;
 
         switch (tok.kind) {
@@ -221,7 +222,7 @@ pub const Unit = struct {
                 const IS_FLOAT: u8 = (1 << 0);
                 const DID_DOT: u8 = (1 << 1);
                 const DID_E: u8 = (1 << 2);
-                var base: u8 = if (source[0] == '0') 8 else 10;
+                var base: u8 = if (source[index] == '0') 8 else 10;
                 var flags: u8 = 0;
                 while (index < source.len) : (index += 1) doneLit: {
                     switch (source[index]) {
@@ -239,7 +240,7 @@ pub const Unit = struct {
                             flags |= IS_FLOAT;
                         },
                         'b', 'B' => |x| {
-                            if (base == 8 and index == 1) {
+                            if (base == 8 and index == start + 1) {
                                 base = 2;
                             } else if (base > 10 and 1 < base - 10) {
                                 continue;
@@ -248,28 +249,31 @@ pub const Unit = struct {
                             }
                         },
                         'x', 'X' => |x| {
-                            if (base == 8 and index == 1) {
+                            if (base == 8 and index == start + 1) {
                                 base = 16;
                             } else {
+                                std.log.err("{s}, pos: {}, {} {}", .{ self.filePos(tidx)[0], self.filePos(tidx)[1], base, start });
                                 std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
                             }
                         },
                         '0' => continue,
-                        '1'...'9' => |x| if (x - '0' < base) {
+                        '1'...'9' => |x| if ((flags & IS_FLOAT) > 0) {
+                            continue;
+                        } else if (x - '0' < base) {
                             continue;
                         } else {
                             std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
                         },
-                        'a', 'c', 'd', 'f'...'k' => |x| if (x - 'a' < base - 10) {
+                        'a', 'c', 'd', 'f'...'k' => |x| if (base > 10 and x - 'a' < base - 10) {
                             continue;
-                        } else if (x == 'f' and (flags & IS_FLOAT) > 0) {
+                        } else if (x == 'f') {
                             break;
                         } else {
                             std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
                         },
-                        'A', 'C', 'D', 'F'...'K' => |x| if (x - 'A' < base - 10) {
+                        'A', 'C', 'D', 'F'...'K' => |x| if (base > 10 and x - 'A' < base - 10) {
                             continue;
-                        } else if (x == 'F' and (flags & IS_FLOAT) > 0) {
+                        } else if (x == 'F') {
                             break;
                         } else {
                             std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
@@ -308,8 +312,19 @@ pub const Unit = struct {
                     }
                 }
             },
+            .identifier => {
+                while (index < source.len) : (index += 1) {
+                    switch (source[index]) {
+                        'a'...'z', 'A'...'Z', '_', '0'...'9' => continue,
+                        else => break,
+                    }
+                }
+            },
             else => {},
         }
+
+        // std.log.warn("{s}, pos: {}", .{self.filePos(tidx)[0], self.filePos(tidx)[1]});
+        // std.log.warn("len: {}", .{index - tok.start});
 
         return index - tok.start;
     }
@@ -349,12 +364,12 @@ pub const Unit = struct {
                     sum += @as(u64, source[index] - '0');
                     continue;
                 },
-                'a', 'c', 'd', 'f'...'k' => |x| if (base > 10 and x - 'a' < base - 10) {
+                'a', 'c', 'd'...'k' => |x| if (base > 10 and x - 'a' < base - 10) {
                     sum *= @as(u64, base);
                     sum += @as(u64, source[index] - 'a' + 10);
                     continue;
                 },
-                'A', 'C', 'D', 'F'...'K' => |x| if (base > 10 and x - 'A' < base - 10) {
+                'A', 'C', 'D'...'K' => |x| if (base > 10 and x - 'A' < base - 10) {
                     sum *= @as(u64, base);
                     sum += @as(u64, source[index] - 'A' + 10);
                     continue;
@@ -477,7 +492,9 @@ pub const Unit = struct {
                         '0' => {
                             c = 0;
                         },
-                        else => {},
+                        '\'' => c = '\'',
+                        '"' => c = '"',
+                        else => std.debug.panic("Invalid escape '{c}'", .{source[index]}),
                     }
                 },
                 '\'' => break,

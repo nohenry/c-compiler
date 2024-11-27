@@ -5,8 +5,31 @@
             "request": "launch",
             "name": "Launch",
             "program": "${workspaceFolder}/zig-out/bin/cp",
-            "args": [],
+            "args": ["test/main.cp"],
             "cwd": "${workspaceFolder}"
-        }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Launch Raylib",
+            "program": "${workspaceFolder}/zig-out/bin/cp",
+            "args": [
+                "-c",
+                "rcore.c",
+                "-Wall",
+                "-D_GNU_SOURCE",
+                "-DPLATFORM_DESKTOP_GLFW",
+                "-DGRAPHICS_API_OPENGL_33",
+                "-Wno-missing-braces",
+                "-Werror=pointer-arith",
+                "-fno-strict-aliasing",
+                "-std=c99",
+                "-O1",
+                "-Werror=implicit-function-declaration",
+                "-I.",
+                "-Iexternal/glfw/include"
+            ],
+            "cwd": "${workspaceFolder}/../repos/raylib/src"
+        },
     ]
 }
