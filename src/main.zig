@@ -522,7 +522,7 @@ pub fn main() !void {
         var preprocessed_writer = preprocessed_buffer.writer();
 
         while (tokenizer.next(false)) |tidx| {
-            unit.writeToken(&preprocessed_writer, tidx);
+            try unit.writeToken(&preprocessed_writer, tidx);
         }
         var out_file = try std.fs.cwd().createFile("out.cp", .{});
         try out_file.writeAll(preprocessed_buffer.items);

@@ -92,6 +92,7 @@ pub const TokenKind = enum(u32) {
     register,
     restrict,
     @"return",
+    sizeof,
     static,
     static_assert,
     @"struct",
@@ -205,6 +206,7 @@ pub const TokenKind = enum(u32) {
             .register => "register",
             .restrict => "restrict",
             .@"return" => "return",
+            .sizeof => "sizeof",
             .static => "static",
             .static_assert => "static_assert",
             .@"struct" => "struct",
@@ -251,6 +253,7 @@ pub const keyword_map = std.StaticStringMap(TokenKind).initComptime(&.{
     .{ "register", .register },
     .{ "restrict", .restrict },
     .{ "return", .@"return" },
+    .{ "sizeof", .@"sizeof" },
     .{ "static", .static },
     .{ "static_assert", .static_assert },
     .{ "struct", .@"struct" },
@@ -294,6 +297,7 @@ pub const TokenRange = struct {
         pub const Type = u8;
         pub const EXPANSION_ARGUMENTS: Type = (1 << 0);
         pub const EXPANSION_DEPTH: Type = (1 << 1);
+        pub const ALREADY_EXPANDED: Type = (1 << 2);
     };
 
     /// Creates a range from an inclusive end token index and a count of tokens
@@ -373,12 +377,28 @@ pub const FileTokenizer = struct {
             @truncate(self.tokenizer.unit.tokens(file_index).items.len - 1);
     }
 
-    pub fn nextVirtual(self: *Self) ?TokenIndex {
+    pub fn nextVirtual(self: *Self) struct{?TokenIndex, bool} {
         while (self.tokenizer.virtual_stack.items.len > 0) : (self.tokenizer.virtual_stack.items.len -= 1) {
             const item_index = self.tokenizer.virtual_stack.getLast();
             if (item_index.start.index < item_index.end.index) {
                 self.tokenizer.virtual_stack.items[self.tokenizer.virtual_stack.items.len - 1].start.index += 1;
-                return item_index.start;
+                const tok = self.tokenizer.unit.token(item_index.start);
+                if (tok.kind == .identifier) {
+                    const ident_str = self.tokenizer.unit.identifierAt(item_index.start);
+                    if (self.tokenizer.unit.type_names.contains(ident_str)) {
+                        const new_tok_index = TokenIndex{
+                            .index = @truncate(self.tokenizer.unit.files.items[item_index.start.file_index].tokens.items.len),
+                            .file_index = item_index.start.file_index,
+                        };
+                        self.tokenizer.unit.files.items[item_index.start.file_index].tokens.append(Token{
+                            .kind = .type_name,
+                            .start = tok.start,
+                        }) catch @panic("OOM");
+
+                        return .{new_tok_index, (item_index.flags & TokenRange.Flags.ALREADY_EXPANDED) > 0};
+                    }
+                }
+                return .{item_index.start, (item_index.flags & TokenRange.Flags.ALREADY_EXPANDED) > 0};
             }
 
             if ((item_index.flags & TokenRange.Flags.EXPANSION_ARGUMENTS) > 0) {
@@ -390,7 +410,7 @@ pub const FileTokenizer = struct {
             }
         }
 
-        return null;
+        return .{null, false};
     }
 
     pub inline fn currentRangeData(self: *Self) i16 {
@@ -492,14 +512,16 @@ pub const FileTokenizer = struct {
             break :blk null;
         } else null;
 
-        const tidx = self.nextVirtual() orelse {
+        const virt = self.nextVirtual();
+        if (virt[1]) return virt[0];
+        const tidx = virt[0] orelse {
 
             if (last_arg) |arg| {
-                if (arg.hasSingleToken()) {
-                    return arg.tokens[0].start;
+                if (arg.hasSingleExpandedToken()) {
+                    return arg.expanded_tokens[0].start;
                 } else {
-                    self.tokenizer.pushVirtualRanges(arg.tokens);
-                    return self.resolveVirtual(null, null);
+                    self.tokenizer.pushVirtualRanges(arg.expanded_tokens);
+                    return self.nextVirtual()[0];
                 }
             }
 
@@ -531,21 +553,56 @@ pub const FileTokenizer = struct {
                 return self.resolveVirtual(tidx, null);
             },
             .hash => {
-                const next_tidx = self.nextVirtual();
-                const next_token = self.tokenizer.unit.token(next_tidx.?);
+                if (last_arg) |arg| {
+                    self.backVirtual();
+                    if (arg.hasSingleToken()) {
+                        return arg.tokens[0].start;
+                    } else {
+                        self.tokenizer.pushVirtualRanges(arg.tokens);
+                        return self.resolveVirtual(null, null);
+                    }
+                }
+
+                if (last_token) |last_tidx| {
+                    self.backVirtual();
+                    if (self.checkIsIdentifier(last_tidx)) |ident_str| {
+                        if (self.checkExpansion(ident_str)) {
+                            return self.resolveVirtual(null, null);
+                        }
+                    }
+                    return last_tidx;
+                }
+
+                const next_virt = self.nextVirtual();
+                var next_tidx = next_virt[0].?;
+
+                var next_token = self.tokenizer.unit.token(next_tidx);
                 if (next_token.kind != .identifier) @panic("Expected macro parameter for stringification");
 
-                var start_token: Token = undefined;
-                const expanded_range = self.expandIdentifier(next_tidx.?, &start_token) orelse {
-                    std.log.err("{s}, pos: {}", .{ self.tokenizer.unit.filePos(next_tidx.?)[0], self.tokenizer.unit.filePos(next_tidx.?)[1] });
-                    std.debug.panic("Expected macro parameter for stringification", .{});
-                };
+                if (self.checkIsIdentifier(next_tidx)) |ident_str| {
+                    if (self.searchExpansionArg(ident_str)) |arg| {
+                        next_tidx = arg.tokens[0].start;
+                        if (arg.hasSingleToken()) {
+                            // next_tidx = arg.tokens[0].start;
+                        } else {
+                            // self.tokenizer.pushVirtualRanges(arg.tokens);
+                            // next_tidx = self.nextVirtual().?;
+                        }
+                        next_token = self.tokenizer.unit.token(next_tidx);
+                    }
+                }
+                // }                var start_token: Token = undefined;
+
+                // const expanded_range = self.expandIdentifier(next_tidx.?, &start_token) orelse {
+                //     std.log.err("{s}, pos: {}", .{ self.tokenizer.unit.filePos(next_tidx.?)[0], self.tokenizer.unit.filePos(next_tidx.?)[1] });
+                //     std.debug.panic("Expected macro parameter for stringification", .{});
+                // };
 
                 const new_token = Token{
                     .kind = .stringified_literal,
-                    .start = start_token.start,
+                    .start = next_token.start,
                 };
-                const file_index = expanded_range.tokens[0].start.file_index;
+                const file_index = next_tidx.file_index;
                 const new_token_idx = self.tokenizer.unit.files.items[file_index].tokens.items.len;
                 self.tokenizer.unit.files.items[file_index].tokens.append(new_token) catch @panic("OOM");
 
@@ -573,7 +630,8 @@ pub const FileTokenizer = struct {
                     }
                 }
 
-                var next_tidx = self.nextVirtual().?;
+                const next_virt = self.nextVirtual();
+                var next_tidx = next_virt[0].?;
                 var next_token = self.tokenizer.unit.token(next_tidx);
 
                 if (self.checkIsIdentifier(next_tidx)) |ident_str| {
@@ -582,7 +640,9 @@ pub const FileTokenizer = struct {
                             next_tidx = arg.tokens[0].start;
                         } else {
                             self.tokenizer.pushVirtualRanges(arg.tokens);
-                            next_tidx = self.nextVirtual().?;
+                            if (self.nextVirtual()[0]) |ntidx| {
+                                next_tidx = ntidx;
+                            }
                         }
                         next_token = self.tokenizer.unit.token(next_tidx);
                     }
@@ -654,15 +714,15 @@ pub const FileTokenizer = struct {
             },
             else => {
                 if (last_token != null) {
-                    self.backVirtual();
 
+                    self.backVirtual();
                     const last_tidx = last_token.?;
                     if (last_arg) |arg| {
-                        if (arg.hasSingleToken()) {
-                            return arg.tokens[0].start;
+                        if (arg.hasSingleExpandedToken()) {
+                            return arg.expanded_tokens[0].start;
                         } else {
-                            self.tokenizer.pushVirtualRanges(arg.tokens);
-                            return self.resolveVirtual(null, null);
+                            self.tokenizer.pushVirtualRanges(arg.expanded_tokens);
+                            return self.nextVirtual()[0].?;
                         }
                     }
 
@@ -1051,6 +1111,7 @@ pub const FileTokenizer = struct {
                                 } else @panic("TODO: parameter arg mismatch");
 
                                 tokens.items.len = 0;
+                                expanded_tokens.items.len = 0;
                                 continue;
                             }
                         },
@@ -1126,6 +1187,10 @@ pub const FileTokenizer = struct {
                     const IS_FLOAT: u8 = (1 << 0);
                     const DID_DOT: u8 = (1 << 1);
                     const DID_E: u8 = (1 << 2);
+                    const SIZE: u8 = (1 << 3);
+                    const LONG: u8 = (1 << 4);
+                    const LONGLONG: u8 = (1 << 5);
+                    const UNSIGNED: u8 = (1 << 6);
                     var base: u8 = if (c == '0') 8 else 10;
                     var flags: u8 = 0;
                     while (self.pos < self.source_len) : (self.pos += 1) doneLit: {
@@ -1193,8 +1258,6 @@ pub const FileTokenizer = struct {
                         }
                     }
 
-                    var unsigned = false;
-                    var long = false;
                     while (self.pos < self.source_len) : (self.pos += 1) {
                         switch (self.source[self.pos]) {
                             'f' => {
@@ -1202,26 +1265,21 @@ pub const FileTokenizer = struct {
                                 break :blk TokenKind.float_literal;
                             },
                             'u', 'U' => {
-                                if (long) break;
-                                unsigned = true;
+                                if ((flags & UNSIGNED) > 0) break;
+                                flags |= UNSIGNED;
                             },
                             'z', 'Z' => {
-                                if (long) break;
-                                self.pos += 1;
-                                if (unsigned)
-                                    break :blk TokenKind.unsigned_size_literal
-                                else
-                                    break :blk TokenKind.size_literal;
+                                if ((flags & (SIZE | LONG | LONGLONG)) > 0) break;
+                                flags |= SIZE;
                             },
                             'l', 'L' => {
-                                if (long) {
-                                    self.pos += 1;
-                                    if (unsigned)
-                                        break :blk TokenKind.unsigned_long_long_literal
-                                    else
-                                        break :blk TokenKind.long_long_literal;
+                                if ((flags & LONG) > 0) {
+                                    if ((flags & (LONGLONG | SIZE)) > 0) break;
+                                    flags &= ~LONG;
+                                    flags |= LONGLONG;
                                 } else {
-                                    long = true;
+                                    if ((flags & (LONG | SIZE)) > 0) break;
+                                    flags |= LONG;
                                 }
                             },
                             else => break,
@@ -1230,12 +1288,20 @@ pub const FileTokenizer = struct {
 
                     if ((flags & IS_FLOAT) > 0)
                         break :blk TokenKind.double_literal
-                    else if (unsigned and long)
+                    else if ((flags & (LONGLONG | UNSIGNED)) > 0)
+                        break :blk TokenKind.unsigned_long_long_literal
+                    else if ((flags & (LONG | UNSIGNED)) > 0)
                         break :blk TokenKind.unsigned_long_literal
-                    else if (unsigned)
-                        break :blk TokenKind.unsigned_int_literal
-                    else if (long)
+                    else if ((flags & (SIZE | UNSIGNED)) > 0)
+                        break :blk TokenKind.unsigned_size_literal
+                    else if ((flags & LONGLONG) > 0)
+                        break :blk TokenKind.long_long_literal
+                    else if ((flags & LONG) > 0)
                         break :blk TokenKind.long_literal
+                    else if ((flags & SIZE) > 0)
+                        break :blk TokenKind.size_literal
+                    else if ((flags & UNSIGNED) > 0)
+                        break :blk TokenKind.unsigned_int_literal
                     else
                         break :blk TokenKind.int_literal;
                 },
@@ -1399,8 +1465,8 @@ pub const FileTokenizer = struct {
                     }
                     const str = self.source[start..self.pos];
 
-                    if (std.mem.eql(u8, str, "PFNGLCREATEBUFFERSPROC")) {
-                        std.log.debug("PFNGLCREATEBUFFERSPROC", .{});
+                    if (std.mem.eql(u8, str, "Color")) {
+                        std.log.debug("Color", .{});
                     }
 
                     if (!self.tokenizer.in_define) {
@@ -1471,6 +1537,10 @@ pub const FileTokenizer = struct {
                         std.debug.assert(define_name.kind == .identifier);
                         const define_str = self.tokenizer.unit.identifierAt(first_token.?);
                         var var_arg = false;
+
+                    if (std.mem.eql(u8, define_str, "__header_inline")) {
+                        std.log.debug("__header_inline", .{});
+                    }
 
                         if (second_token != null and self.tokenizer.unit.token(second_token.?).kind == .open_paren) {
                             // Function type macro
@@ -1754,6 +1824,10 @@ pub const FileTokenizer = struct {
                             }
                             writer.print("\x1b[0m\n", .{}) catch @panic("IOERR");
                         }
+                    } else if (std.mem.eql(u8, directive_str, "pragma")) {
+                        while (self.tokenizer.next(true)) |_| {}
+                    } else {
+                        std.debug.panic("unknown directive {s}", .{directive_str});
                     }
 
                     self.tokenizer.in_define = old_define;
@@ -1911,7 +1985,9 @@ pub const Tokenizer = struct {
         var i = ranges.len;
         while (i > 0) {
             i -= 1;
-            self.virtual_stack.append(ranges[i]) catch @panic("OOM");
+            var rng = ranges[i];
+            rng.flags |= TokenRange.Flags.ALREADY_EXPANDED;
+            self.virtual_stack.append(rng) catch @panic("OOM");
         }
     }
 

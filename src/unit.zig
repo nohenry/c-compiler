@@ -188,7 +188,16 @@ pub const Unit = struct {
             .string_literal => {
                 try preprocessed_writer.writeByte('"');
                 const token_source_slice = self.stringAt(tidx);
-                try preprocessed_writer.writeAll(token_source_slice);
+                for (token_source_slice) |c| {
+                    switch (c) {
+                        '"' => try preprocessed_writer.writeAll("\\\""),
+                        '\\' => try preprocessed_writer.writeAll("\\\\"),
+                        '\n' => try preprocessed_writer.writeAll("\\n"),
+                        '\t' => try preprocessed_writer.writeAll("\\t"),
+                        else => try preprocessed_writer.writeByte(c),
+                    }
+                }
+                // try preprocessed_writer.writeAll(token_source_slice);
                 try preprocessed_writer.writeByte('"');
             },
             .stringified_literal => {
@@ -204,7 +213,14 @@ pub const Unit = struct {
             .char_literal => {
                 try preprocessed_writer.writeByte('\'');
                 const token_source_slice = self.charAt(tidx);
-                try preprocessed_writer.writeByte(token_source_slice);
+                switch (token_source_slice) {
+                    '\'' => try preprocessed_writer.writeAll("\\'"),
+                    '\\' => try preprocessed_writer.writeAll("\\\\"),
+                    '\n' => try preprocessed_writer.writeAll("\\n"),
+                    '\r' => try preprocessed_writer.writeAll("\\r"),
+                    '\t' => try preprocessed_writer.writeAll("\\t"),
+                    else => try preprocessed_writer.writeByte(token_source_slice),
+                }
                 try preprocessed_writer.writeByte('\'');
             },
             else => {
@@ -264,6 +280,10 @@ pub const Unit = struct {
                 const IS_FLOAT: u8 = (1 << 0);
                 const DID_DOT: u8 = (1 << 1);
                 const DID_E: u8 = (1 << 2);
+                const SIZE: u8 = (1 << 3);
+                const LONG: u8 = (1 << 4);
+                const LONGLONG: u8 = (1 << 5);
+                const UNSIGNED: u8 = (1 << 6);
                 var base: u8 = if (source[index] == '0') 8 else 10;
                 var flags: u8 = 0;
                 while (index < source.len) : (index += 1) doneLit: {
@@ -324,30 +344,28 @@ pub const Unit = struct {
                     }
                 }
 
-                var unsigned = false;
-                var long = false;
                 while (index < source.len) : (index += 1) {
                     switch (source[index]) {
                         'f' => {
                             index += 1;
                             break;
                         },
-                        'u' => {
-                            if (long) break;
-                            index += 1;
-                            unsigned = true;
+                        'u', 'U' => {
+                            if ((flags & UNSIGNED) > 0) break;
+                            flags |= UNSIGNED;
                         },
                         'z', 'Z' => {
-                            if (long) break;
-                            index += 1;
-                            break;
+                            if ((flags & (SIZE | LONG | LONGLONG)) > 0) break;
+                            flags |= SIZE;
                         },
                         'l', 'L' => {
-                            if (long) {
-                                index += 1;
-                                break;
+                            if ((flags & LONG) > 0) {
+                                if ((flags & (LONGLONG | SIZE)) > 0) break;
+                                flags &= ~LONG;
+                                flags |= LONGLONG;
                             } else {
-                                long = true;
+                                if ((flags & (LONG | SIZE)) > 0) break;
+                                flags |= LONG;
                             }
                         },
                         else => break,
