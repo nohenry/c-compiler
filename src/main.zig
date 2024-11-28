@@ -522,45 +522,7 @@ pub fn main() !void {
         var preprocessed_writer = preprocessed_buffer.writer();
 
         while (tokenizer.next(false)) |tidx| {
-            defer preprocessed_writer.writeByte(' ') catch @panic("oof");
-            const token = unit.token(tidx);
-            switch (token.kind) {
-                .identifier => {
-                    const token_source_slice = unit.identifierAt(tidx);
-                    try preprocessed_writer.writeAll(token_source_slice);
-                },
-                .string_literal => {
-                    try preprocessed_writer.writeByte('"');
-                    const token_source_slice = unit.stringAt(tidx);
-                    try preprocessed_writer.writeAll(token_source_slice);
-                    try preprocessed_writer.writeByte('"');
-                },
-                .stringified_literal => {
-                    try preprocessed_writer.writeByte('"');
-                    const token_source_slice = unit.stringifiedAt(tidx);
-                    try preprocessed_writer.writeAll(token_source_slice);
-                    try preprocessed_writer.writeByte('"');
-                },
-                .type_name => {
-                    const token_source_slice = unit.identifierAt(tidx);
-                    try preprocessed_writer.writeAll(token_source_slice);
-                },
-                .char_literal => {
-                    try preprocessed_writer.writeByte('\'');
-                    const token_source_slice = unit.charAt(tidx);
-                    try preprocessed_writer.writeByte(token_source_slice);
-                    try preprocessed_writer.writeByte('\'');
-                },
-                else => {
-                    if (token.kind.isIntLiteral()) {
-                        const token_source_slice = unit.tokenSourceSlice(tidx);
-                        try preprocessed_writer.writeAll(token_source_slice);
-                        continue;
-                    }
-
-                    try preprocessed_writer.writeAll(token.kind.toStr());
-                },
-            }
+            unit.writeToken(&preprocessed_writer, tidx);
         }
         var out_file = try std.fs.cwd().createFile("out.cp", .{});
         try out_file.writeAll(preprocessed_buffer.items);

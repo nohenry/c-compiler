@@ -177,6 +177,48 @@ pub const Unit = struct {
         return null;
     }
 
+    pub fn writeToken(self: *Unit, preprocessed_writer: anytype, tidx: TokenIndex) !void {
+        defer preprocessed_writer.writeByte(' ') catch @panic("oof");
+        const tok = self.token(tidx);
+        switch (tok.kind) {
+            .identifier => {
+                const token_source_slice = self.identifierAt(tidx);
+                try preprocessed_writer.writeAll(token_source_slice);
+            },
+            .string_literal => {
+                try preprocessed_writer.writeByte('"');
+                const token_source_slice = self.stringAt(tidx);
+                try preprocessed_writer.writeAll(token_source_slice);
+                try preprocessed_writer.writeByte('"');
+            },
+            .stringified_literal => {
+                try preprocessed_writer.writeByte('"');
+                const token_source_slice = self.stringifiedAt(tidx);
+                try preprocessed_writer.writeAll(token_source_slice);
+                try preprocessed_writer.writeByte('"');
+            },
+            .type_name => {
+                const token_source_slice = self.identifierAt(tidx);
+                try preprocessed_writer.writeAll(token_source_slice);
+            },
+            .char_literal => {
+                try preprocessed_writer.writeByte('\'');
+                const token_source_slice = self.charAt(tidx);
+                try preprocessed_writer.writeByte(token_source_slice);
+                try preprocessed_writer.writeByte('\'');
+            },
+            else => {
+                if (tok.kind.isIntLiteral()) {
+                    const token_source_slice = self.tokenSourceSlice(tidx);
+                    try preprocessed_writer.writeAll(token_source_slice);
+                    return;
+                }
+
+                try preprocessed_writer.writeAll(tok.kind.toStr());
+            },
+        }
+    }
+
     pub inline fn tokens(self: *Unit, file_index: FileIndex) *std.ArrayList(Token) {
         return &self.files.items[file_index].tokens;
     }
@@ -320,7 +362,9 @@ pub const Unit = struct {
                     }
                 }
             },
-            else => {},
+            else => {
+                index += @truncate(tok.kind.toStr().len);
+            },
         }
 
         // std.log.warn("{s}, pos: {}", .{self.filePos(tidx)[0], self.filePos(tidx)[1]});
