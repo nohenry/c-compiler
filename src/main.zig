@@ -3,6 +3,7 @@ const Unit = @import("unit.zig").Unit;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const Parser = @import("parser.zig").Parser;
 const Node = @import("parser.zig").Node;
+const cg = @import("codegen.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -546,6 +547,17 @@ pub fn main() !void {
         const node_index = unit.node_ranges.items[i + unit_range.start];
         try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, writer);
     }
+
+    var codegen = try cg.CodeGenerator.init(&unit);
+    for (0..unit_range.count) |i| {
+        const node_index = unit.node_ranges.items[i + unit_range.start];
+        // try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, writer);
+        _ = try codegen.genNode(node_index);
+    }
+
+    try codegen.writeToFile("main");
+
+    // builder.write
 
     // while (tokenizer.next()) |token_index| {
     //     const token = &unit.tokens.items[token_index];

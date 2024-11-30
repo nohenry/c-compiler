@@ -19,13 +19,17 @@
 // #define FOO(e) e ? BAR(#e, 1, 2) : false
 // #define F(f, x, y) (f, x, y)
 
+typedef struct node {
+    struct node n;
+} Node;
+
 int main() {
+    return 1 - 2 + 3 - 4 + 7;
 // __DARWIN_ALIAS(fopen);
     // char *c = A(F((y + 2)));
 
 //   assert(f > e);
     // FOO(f > e);
-    F(1, 2, 3)
 
     // int i = (int) {.bar = 3};
     // char *c = B(F(1));
