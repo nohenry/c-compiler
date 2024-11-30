@@ -1,71 +1,122 @@
 const std = @import("std");
+const Unit = @import("unit.zig").Unit;
+const TokenIndex = @import("tokenizer.zig").TokenIndex;
+const NodeIndex = @import("parser.zig").NodeIndex;
+const TypeQualifier = @import("parser.zig").TypeQualifier;
 
-pub const TypeKind = union(enum) {
-    void: void,
-    char: bool,
-    // uchar: bool,
-    short: bool,
-    // ushort: bool,
-    int: bool,
-    // uint: bool,
-    long: bool,
-    // ulong: bool,
-    longlong: bool,
-    // ulonglong: bool,
-    float: void,
-    double: void,
-    longdouble: void,
-    bool: void,
+pub const TypeKind = struct {
+    qualifiers: TypeQualifier.Type,
+    kind: union(enum) {
+        void: void,
+        char: bool,
+        short: bool,
+        int: bool,
+        long: bool,
+        longlong: bool,
+        float: void,
+        double: void,
+        longdouble: void,
+        bool: void,
 
-    pointer: struct { base: Type },
+        pointer: struct { base: Type },
 
-    array: struct { base: Type, size: usize },
+        array: struct { base: Type, size: usize },
 
-    @"struct": struct {
-        backing_field: ?Type,
-        fields: Type,
-    },
-    @"union": struct {
-        backing_field: ?Type,
-        variants: Type,
-        indicies: Type,
-    },
+        unnamed_struct: struct {
+            nidx: NodeIndex,
+            fields: Type,
+        },
+        @"struct": struct {
+            name: TokenIndex,
+            fields: Type,
+        },
+        unnamed_union: struct {
+            nidx: NodeIndex,
+            variants: Type,
+        },
+        @"union": struct {
+            name: TokenIndex,
+            variants: Type,
+        },
 
-    multi_type: []const Type,
-    multi_type_impl: MultiType,
-    multi_type_keyed: std.StringArrayHashMap(Type),
-    multi_type_keyed_impl: usize,
+        multi_type: []const Type,
+        multi_type_impl: MultiType,
+        multi_type_keyed: std.StringArrayHashMap(Type),
+        multi_type_keyed_impl: usize,
 
-    func: struct {
-        params: Type,
-        ret_ty: ?Type,
+        func: struct {
+            params: Type,
+            ret_ty: ?Type,
+        },
     },
 
     pub fn isIntegral(self: @This()) bool {
-        return switch (self) {
+        return switch (self.kind) {
             .char, .short, .int, .long, .longlong => true,
             else => false,
         };
     }
 
     pub fn rank(self: @This()) u32 {
-        return @intFromEnum(self);
+        return @intFromEnum(self.kind);
+    }
+
+    pub fn isStructured(self: *const @This()) bool {
+        return switch (self.kind) {
+            .@"struct", .unnamed_struct, .@"union", .unnamed_union => true,
+            else => false,
+        };
+    }
+
+    pub fn getStructureField(self: *const @This(), field_name: []const u8) ?Type {
+        return switch (self.kind) {
+            .@"struct" => |st| {
+                return st.fields.kind.multi_type_keyed.get(field_name);
+            },
+            .unnamed_struct => |st| {
+                return st.fields.kind.multi_type_keyed.get(field_name);
+            },
+            .@"union" => |st| {
+                return st.variants.kind.multi_type_keyed.get(field_name);
+            },
+            .unnamed_union => |st| {
+                return st.variants.kind.multi_type_keyed.get(field_name);
+            },
+            // .@"struct", .unnamed_struct, .@"union", .unnamed_union => true,
+            else => unreachable,
+        };
+    }
+
+    pub fn isScalar(self: *const @This()) bool {
+        return switch (self.kind) {
+            .char,
+            .short,
+            .int,
+            .long,
+            .longlong,
+            .float,
+            .double,
+            .longdouble,
+            .pointer,
+            => true,
+            else => false,
+        };
     }
 
     pub fn isSigned(self: @This()) bool {
-        return switch (self) {
+        return switch (self.kind) {
             .char, .short, .int, .long, .longlong => |x| x,
             else => false,
         };
     }
 
     pub fn toSigned(self: @This(), signed: bool) @This() {
-        var s = self;
+        var s = self.kind;
         switch (s) {
             .char, .short, .int, .long, .longlong => |*x| x.* = signed,
             else => @panic("Invalid"),
         }
-        return s;
+        return .{ .kind = s, .qualifiers = self.qualifiers };
     }
 };
 
@@ -83,17 +134,17 @@ pub const TypeMapContext = struct {
     }
 
     pub fn eql(ctx: @This(), a: TypeKind, b: TypeKind) bool {
-        switch (a) {
+        switch (a.kind) {
             .multi_type => |vals| {
-                if (b != .multi_type_impl) return false;
-                const ind = b.multi_type_impl;
+                if (b.kind != .multi_type_impl) return false;
+                const ind = b.kind.multi_type_impl;
 
                 return std.mem.eql(Type, vals, ctx.interner.multi_types.items[ind.start .. ind.start + ind.len]);
             },
             .multi_type_keyed => |vals| {
-                if (b != .multi_type_keyed_impl) return false;
+                if (b.kind != .multi_type_keyed_impl) return false;
 
-                const bmap = &ctx.interner.multi_types_keyed.items[b.multi_type_keyed_impl];
+                const bmap = &ctx.interner.multi_types_keyed.items[b.kind.multi_type_keyed_impl];
                 if (vals.count() != bmap.count()) return false;
 
                 var ait = vals.iterator();
@@ -125,95 +176,158 @@ pub const TypeMap = std.HashMap(
 pub const Type = *const TypeKind;
 
 pub const TypeInterner = struct {
-    allocator: std.mem.Allocator,
+    unit: *Unit,
     type_map: TypeMap,
     multi_types: std.ArrayList(Type),
     multi_types_keyed: std.ArrayList(std.StringArrayHashMap(Type)),
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(unit: *Unit) Self {
         return .{
-            .allocator = allocator,
+            .unit = unit,
             .type_map = undefined,
-            .multi_types = std.ArrayList(Type).init(allocator),
-            .multi_types_keyed = std.ArrayList(std.StringArrayHashMap(Type)).init(allocator),
+            .multi_types = std.ArrayList(Type).init(unit.allocator),
+            .multi_types_keyed = std.ArrayList(std.StringArrayHashMap(Type)).init(unit.allocator),
         };
     }
 
     pub fn setup(self: *Self) void {
-        const types = TypeMap.initContext(self.allocator, .{ .interner = self });
+        const types = TypeMap.initContext(self.unit.allocator, .{ .interner = self });
         self.type_map = types;
     }
 
     pub fn voidTy(self: *Self) Type {
-        return self.createOrGetTy(.void);
+        return self.createOrGetTy(.void, 0);
     }
 
-    pub fn charTy(self: *Self, signed: bool) Type {
-        return self.createOrGetTy(.{ .char = signed });
+    pub fn charTy(self: *Self, signed: bool, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{ .char = signed }, qualifiers);
     }
 
-    pub fn shortTy(self: *Self, signed: bool) Type {
-        return self.createOrGetTy(.{ .short = signed });
+    pub fn shortTy(self: *Self, signed: bool, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{ .short = signed }, qualifiers);
     }
 
-    pub fn intTy(self: *Self, signed: bool) Type {
-        return self.createOrGetTy(.{ .int = signed });
+    pub fn intTy(self: *Self, signed: bool, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{ .int = signed }, qualifiers);
     }
 
-    pub fn longTy(self: *Self, signed: bool) Type {
-        return self.createOrGetTy(.{ .long = signed });
+    pub fn longTy(self: *Self, signed: bool, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{ .long = signed }, qualifiers);
     }
 
-    pub fn longlongTy(self: *Self, signed: bool) Type {
-        return self.createOrGetTy(.{ .longlong = signed });
+    pub fn longlongTy(self: *Self, signed: bool, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{ .longlong = signed }, qualifiers);
     }
 
-    pub fn floatTy(self: *Self) Type {
-        return self.createOrGetTy(.float);
+    pub fn floatTy(self: *Self, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.float, qualifiers);
     }
 
-    pub fn doubleTy(self: *Self) Type {
-        return self.createOrGetTy(.double);
+    pub fn doubleTy(self: *Self, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.double, qualifiers);
     }
 
-    pub fn longdoubleTy(self: *Self) Type {
-        return self.createOrGetTy(.longdouble);
+    pub fn longdoubleTy(self: *Self, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.longdouble, qualifiers);
     }
 
-    pub fn boolTy(self: *Self) Type {
-        return self.createOrGetTy(.bool);
+    pub fn boolTy(self: *Self, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.bool, qualifiers);
+    }
+
+    pub fn pointerTy(self: *Self, base: Type, qualifier: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{ .pointer = .{ .base = base } }, qualifier);
+    }
+
+    pub fn rebasePointer(self: *Self, ptr_type: Type, new_base: Type) Type {
+        return self.pointerTy(new_base, ptr_type.qualifiers);
+    }
+
+    pub fn rebasePointerRecursive(self: *Self, ptr_type: Type, new_base: Type) struct {
+        /// new type
+        Type,
+        /// old base
+        Type,
+    } {
+        switch (ptr_type.kind) {
+            .pointer => |ptr| {
+                const new_type, const old_base = self.rebasePointerRecursive(ptr.base, new_base);
+
+                return .{
+                    self.pointerTy(
+                        new_type,
+                        ptr_type.qualifiers,
+                    ),
+                    old_base,
+                };
+            },
+            .func => |fun| {
+                const new_type, const old_base = self.rebasePointerRecursive(fun.ret_ty.?, new_base);
+                return .{
+                    self.createOrGetTy(.{
+                        .func = .{
+                            .params = fun.params,
+                            .ret_ty = new_type,
+                        },
+                    }, ptr_type.qualifiers),
+                    old_base,
+                };
+            },
+            else => return .{ new_base, ptr_type },
+        }
     }
 
     pub fn arrayTy(self: *Self, base: Type, size: usize) Type {
-        return self.createOrGetTy(.{ .array = .{ .base = base, .size = size } });
+        return self.createOrGetTy(.{ .array = .{ .base = base, .size = size } }, 0);
     }
 
-    pub fn structTy(self: *Self, backing_field: ?Type, fields: std.StringArrayHashMap(Type)) Type {
+    pub fn unnamedStructTy(self: *Self, nidx: NodeIndex, fields: std.StringArrayHashMap(Type), qualifiers: TypeQualifier.Type) Type {
+        const field_tys = self.multiTyKeyed(fields);
+        return self.createOrGetTy(.{
+            .unnamed_struct = .{
+                .nidx = nidx,
+                .fields = field_tys,
+            },
+        }, qualifiers);
+    }
+
+    pub fn structTy(self: *Self, name: TokenIndex, fields: std.StringArrayHashMap(Type), qualifiers: TypeQualifier.Type) Type {
         const field_tys = self.multiTyKeyed(fields);
         return self.createOrGetTy(.{
             .@"struct" = .{
-                .backing_field = backing_field,
+                .name = name,
                 .fields = field_tys,
             },
-        });
+        }, qualifiers);
     }
 
-    pub fn unionTy(self: *Self, backing_field: ?Type, variants: std.StringArrayHashMap(Type), indicies: []const Type) Type {
+    pub fn unnamedUnionTy(self: *Self, nidx: NodeIndex, variants: std.StringArrayHashMap(Type), qualifiers: TypeQualifier.Type) Type {
         const variant_tys = self.multiTyKeyed(variants);
-        const index_tys = self.multiTy(indicies);
+        return self.createOrGetTy(.{
+            .unnamed_union = .{
+                .nidx = nidx,
+                .variants = variant_tys,
+            },
+        }, qualifiers);
+    }
+
+    pub fn unionTy(self: *Self, name: TokenIndex, variants: std.StringArrayHashMap(Type), qualifiers: TypeQualifier.Type) Type {
+        const variant_tys = self.multiTyKeyed(variants);
         return self.createOrGetTy(.{
             .@"union" = .{
-                .backing_field = backing_field,
+                .name = name,
                 .variants = variant_tys,
-                .indicies = index_tys,
             },
-        });
+        }, qualifiers);
     }
 
     pub fn multiTy(self: *Self, types: []const Type) Type {
-        const ty = self.types.get(.{ .multi_type = types });
+        const ty = self.type_map.get(.{
+            .kind = .{ .multi_type = types },
+            .qualifiers = 0,
+        });
         if (ty) |val| {
             return val;
         }
@@ -222,15 +336,16 @@ pub const TypeInterner = struct {
         self.multi_types.appendSlice(types) catch unreachable;
         const endi = self.multi_types.items.len;
 
-        const val = self.allocator.create(TypeKind) catch unreachable;
-        val.* = .{
+        const val = self.unit.allocator.create(TypeKind) catch unreachable;
+        val.kind = .{
             .multi_type_impl = .{
                 .start = @truncate(starti),
                 .len = @truncate(endi - starti),
             },
         };
+        val.qualifiers = 0;
 
-        self.types.put(val.*, val) catch unreachable;
+        self.type_map.put(val.*, val) catch unreachable;
 
         return val;
     }
@@ -269,7 +384,7 @@ pub const TypeInterner = struct {
                 .params = param_multi_ty,
                 .ret_ty = ret_ty,
             },
-        });
+        }, 0);
     }
 
     pub fn printTyToStr(self: *const Self, ty: Type, allocator: std.mem.Allocator) []const u8 {
@@ -280,7 +395,16 @@ pub const TypeInterner = struct {
     }
 
     pub fn printTyWriter(self: *const Self, ty: Type, writer: anytype) !void {
-        switch (ty.*) {
+        switch (ty.kind) {
+            .pointer => {},
+            else => {
+                if (ty.qualifiers > 0) {
+                    try TypeQualifier.writePretty(ty.qualifiers, writer);
+                    try writer.print(" ", .{});
+                }
+            },
+        }
+        switch (ty.kind) {
             .void => try writer.print("void", .{}),
             .char => |sign| if (sign)
                 try writer.print("char", .{})
@@ -305,24 +429,35 @@ pub const TypeInterner = struct {
 
             .float => try writer.print("float", .{}),
             .double => try writer.print("double", .{}),
-            .longdouble =>  try writer.print("long double", .{}),
+            .longdouble => try writer.print("long double", .{}),
             .bool => try writer.print("bool", .{}),
-            
+
             .pointer => |ptr| {
-                try writer.print("*", .{});
                 try self.printTyWriter(ptr.base, writer);
+                try writer.print(" *", .{});
+                try TypeQualifier.writePretty(ty.qualifiers, writer);
             },
 
             .array => |val| {
                 try self.printTyWriter(val.base, writer);
                 try writer.print("[{}]", .{val.size});
             },
-            .@"struct" => |rec| {
-                try writer.print("struct", .{});
+            .unnamed_struct => |rec| {
+                try writer.print("struct ({})", .{rec.nidx});
                 try self.printTyWriter(rec.fields, writer);
+            },
+            .@"struct" => |rec| {
+                try writer.print("struct ", .{});
+                try writer.writeAll(self.unit.identifierAt(rec.name));
+                try self.printTyWriter(rec.fields, writer);
+            },
+            .unnamed_union => |uni| {
+                try writer.print("union ({}) ", .{uni.nidx});
+                try self.printTyWriter(uni.variants, writer);
             },
             .@"union" => |uni| {
                 try writer.print("union", .{});
+                try writer.writeAll(self.unit.identifierAt(uni.name));
                 try self.printTyWriter(uni.variants, writer);
             },
 
@@ -332,14 +467,19 @@ pub const TypeInterner = struct {
                     try self.printTyWriter(tys[0], writer);
 
                     for (tys[1..]) |mty| {
-                        try writer.print(",", .{});
+                        try writer.print(", ", .{});
                         try self.printTyWriter(mty, writer);
                     }
                 }
                 try writer.print(")", .{});
             },
             .multi_type_impl => |mty| {
-                try self.printTyWriter(&.{ .multi_type = self.multi_types.items[mty.start .. mty.start + mty.len] }, writer);
+                try self.printTyWriter(&.{
+                    .qualifiers = 0,
+                    .kind = .{
+                        .multi_type = self.multi_types.items[mty.start .. mty.start + mty.len],
+                    },
+                }, writer);
             },
             .multi_type_keyed => |kyd| {
                 try writer.print("{{", .{});
@@ -357,7 +497,12 @@ pub const TypeInterner = struct {
                 try writer.print("}}", .{});
             },
             .multi_type_keyed_impl => |ind| {
-                try self.printTyWriter(&.{ .multi_type_keyed = self.multi_types_keyed.items[ind] }, writer);
+                try self.printTyWriter(&.{
+                    .qualifiers = 0,
+                    .kind = .{
+                        .multi_type_keyed = self.multi_types_keyed.items[ind],
+                    },
+                }, writer);
             },
             .func => |func| {
                 if (func.ret_ty) |ret| {
@@ -376,13 +521,27 @@ pub const TypeInterner = struct {
         self.printTyWriter(ty, writer.writer()) catch @panic("Error while printing");
     }
 
-    pub fn createOrGetTy(self: *Self, value: TypeKind) Type {
+    pub fn createOrGetTy(self: *Self, value: std.meta.FieldType(TypeKind, .kind), qualifiers: TypeQualifier.Type) Type {
+        const ty = self.type_map.getOrPut(.{ .kind = value, .qualifiers = qualifiers }) catch unreachable;
+        if (ty.found_existing) {
+            return ty.value_ptr.*;
+        }
+
+        const val = self.unit.allocator.create(TypeKind) catch unreachable;
+        val.kind = value;
+        val.qualifiers = qualifiers;
+
+        ty.value_ptr.* = val;
+        return ty.value_ptr.*;
+    }
+
+    pub fn createOrGetTyKind(self: *Self, value: TypeKind) Type {
         const ty = self.type_map.getOrPut(value) catch unreachable;
         if (ty.found_existing) {
             return ty.value_ptr.*;
         }
 
-        const val = self.allocator.create(TypeKind) catch unreachable;
+        const val = self.unit.allocator.create(TypeKind) catch unreachable;
         val.* = value;
 
         ty.value_ptr.* = val;

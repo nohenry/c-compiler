@@ -82,7 +82,11 @@ pub const Unit = struct {
     node_ranges: std.ArrayList(NodeIndex),
 
     interner: *ty.TypeInterner,
+    declared_type: std.AutoHashMap(NodeIndex, ty.Type),
     node_to_type: std.AutoHashMap(NodeIndex, ty.Type),
+    // name_to_node: std.StringHashMap(NodeIndex),
+    node_to_node: std.AutoHashMap(NodeIndex, NodeIndex),
+    symbol_table: SymbolTable,
 
     defines: std.StringHashMap(DefineValue),
     define_fns: std.StringHashMap(DefineFunction),
@@ -103,10 +107,6 @@ pub const Unit = struct {
         include_dirs.append("/opt/homebrew/Cellar/llvm/18.1.7/lib/clang/18/include") catch @panic("OOM");
         include_dirs.append("/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk/usr/include") catch @panic("OOM");
 
-        const interner = allocator.create(ty.TypeInterner) catch @panic("OOM");
-        interner.* = ty.TypeInterner.init(allocator);
-        interner.setup();
-
         return .{
             .allocator = allocator,
             .files = files,
@@ -115,8 +115,11 @@ pub const Unit = struct {
 
             .nodes = std.ArrayList(Node).init(allocator),
             .node_ranges = std.ArrayList(NodeIndex).init(allocator),
-            .interner = interner,
+            .interner = undefined,
+            .node_to_node = std.AutoHashMap(NodeIndex, NodeIndex).init(allocator),
+            .declared_type = std.AutoHashMap(NodeIndex, ty.Type).init(allocator),
             .node_to_type = std.AutoHashMap(NodeIndex, ty.Type).init(allocator),
+            .symbol_table = SymbolTable.init(allocator),
             .defines = std.StringHashMap(DefineValue).init(allocator),
             .define_fns = std.StringHashMap(DefineFunction).init(allocator),
             .include_dirs = include_dirs,
@@ -614,4 +617,55 @@ pub const Unit = struct {
     //     pub inline fn get(self: *Self, index: StringInterner.Index) []const u8 {
     //         return self.get(index);
     //     }
+};
+
+pub const SymbolTable = struct {
+    symbol_stack: std.ArrayList(SymbolScope),
+
+    const Self = @This();
+    pub fn init(allocator: std.mem.Allocator) Self {
+        var symbol_stack = std.ArrayList(SymbolScope).init(allocator);
+        symbol_stack.append(.{
+            .symbols = std.StringHashMap(Symbol).init(allocator),
+        }) catch @panic("OOM");
+
+        return .{
+            .symbol_stack = symbol_stack,
+        };
+    }
+
+    pub fn pushScope(self: *Self) void {
+        self.symbol_stack.append(.{
+            .symbols = std.StringHashMap(Symbol).init(self.symbol_stack.allocator),
+        }) catch @panic("OOM");
+    }
+
+    pub fn popScope(self: *Self) void {
+        self.symbol_stack.items.len -= 1;
+    }
+
+    pub fn searchSymbol(self: *const Self, name: []const u8) ?Symbol {
+        var i = self.symbol_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+
+            if (self.symbol_stack.items[i].symbols.get(name)) |sym| {
+                return sym;
+            }
+        }
+
+        return null;
+    }
+
+    pub fn putSymbol(self: *const Self, name: []const u8, sym: Symbol) void {
+        self.symbol_stack.items[self.symbol_stack.items.len - 1].symbols.put(name, sym) catch @panic("OOM");
+    }
+};
+
+pub const SymbolScope = struct {
+    symbols: std.StringHashMap(Symbol),
+};
+
+pub const Symbol = struct {
+    nidx: NodeIndex,
 };

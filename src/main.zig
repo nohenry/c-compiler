@@ -5,6 +5,7 @@ const Parser = @import("parser.zig").Parser;
 const Node = @import("parser.zig").Node;
 const cg = @import("codegen.zig");
 const TypeChecker = @import("typecheck.zig").TypeChecker;
+const TypeInterner = @import("types.zig").TypeInterner;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -43,6 +44,10 @@ pub fn main() !void {
     std.log.info("CWD: {s}", .{absolute_path});
 
     var unit = Unit.init(gpa.allocator());
+    var interner = TypeInterner.init(&unit);
+    interner.setup();
+    unit.interner = &interner;
+
     const config_defines = [_]struct { []const u8, []const u8 }{
         .{ "__STDC__", "" },
         .{ "__arm64__", "" },

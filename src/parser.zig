@@ -111,8 +111,8 @@ pub const NodeKind = enum(u32) {
     ///            b(u16) = relative index of parameter type
     function_type_one_parameter,
     /// node_data: a(u16) = relative index of return type,
-    ///            b(u16) = relative index of parameter type start,
-    ///            g(u8)  = parameter type count
+    ///            b(u16)  = parameter type count
+    ///            b(u32) = relative index of parameter type start,
     function_type_parameter,
 
     /// node_data: a(u16) = relative index of type, c(u8) = storage class
@@ -340,6 +340,21 @@ pub const TypeQualifier = struct {
         }
         if ((type_qualifier & atomic) > 0) {
             _ = try writer.write("ATOMIC ");
+        }
+    }
+
+    pub fn writePretty(type_qualifier: Type, writer: anytype) !void {
+        if ((type_qualifier & @"const") > 0) {
+            _ = try writer.write("const");
+        }
+        if ((type_qualifier & restrict) > 0) {
+            _ = try writer.write("restrict");
+        }
+        if ((type_qualifier & @"volatile") > 0) {
+            _ = try writer.write("volatile");
+        }
+        if ((type_qualifier & atomic) > 0) {
+            _ = try writer.write("atomic");
         }
     }
 };
@@ -570,8 +585,8 @@ pub const Node = extern struct {
             },
             .function_type_parameter => {
                 const return_type_index = absoluteIndex(index, self.data.as(.four).a);
-                const parameter_start_index = absoluteIndex(index, self.data.as(.four).b);
-                const parameter_count = self.data.as(.eight).g;
+                const parameter_start_index = self.data.as(.two).b;
+                const parameter_count = self.data.as(.four).b;
                 try writer.print("\x1b[1;35mFunctionType\x1b[0m", .{});
 
                 result = NodeRangeOrNode.initNodeAndRange(return_type_index, parameter_start_index, parameter_count);
@@ -1062,6 +1077,11 @@ pub const Node = extern struct {
                 try unit.interner.printTyWriter(ty, writer);
                 try writer.print("\x1b[0m", .{});
             }
+            if (unit.declared_type.get(index)) |ty| {
+                try writer.print(" : \x1b[31;1m", .{});
+                try unit.interner.printTyWriter(ty, writer);
+                try writer.print("\x1b[0m", .{});
+            }
         }
         try writer.writeByte('\n');
 
@@ -1090,10 +1110,10 @@ pub const Node = extern struct {
                 try writeTree(rng.node, unit, indent + 1, rng.range.count == 0, with_types, writer);
 
                 for (rng.range.start..rng.range.start + rng.range.count) |i| {
-                    // const node_index = unit.node_ranges.items[i];
+                    const node_index = unit.node_ranges.items[i];
 
                     const is_last = i == rng.range.start + rng.range.count - 1;
-                    try writeTree(@truncate(i), unit, indent + 1, is_last, with_types, writer);
+                    try writeTree(node_index, unit, indent + 1, is_last, with_types, writer);
                 }
             },
         }
@@ -1855,8 +1875,8 @@ pub const Parser = struct {
             },
             .range => |rng| {
                 node_kind = .function_type_parameter;
-                node_data.as(.four).b = @truncate(self.relativeOffset(rng.start));
-                node_data.as(.eight).g = @truncate(rng.count);
+                node_data.as(.four).b = @truncate(rng.count);
+                node_data.as(.two).b = rng.start;
             },
         }
 

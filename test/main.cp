@@ -23,7 +23,8 @@ typedef struct node {
     struct node n;
 } Node;
 
-int main() {
+int main(float, int) {
+    const int *const (i)(int, float);
     return 1 + 2u + 3uL + 4uLL + 5.0;
 // __DARWIN_ALIAS(fopen);
     // char *c = A(F((y + 2)));
