@@ -4,6 +4,7 @@ const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const Parser = @import("parser.zig").Parser;
 const Node = @import("parser.zig").Node;
 const cg = @import("codegen.zig");
+const TypeChecker = @import("typecheck.zig").TypeChecker;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -540,12 +541,21 @@ pub fn main() !void {
     const unit_range = try parser.parseUnit();
     std.log.info("Range: {}-{}", .{ unit_range.start, unit_range.count });
 
+
+
     const stdout = std.io.getStdOut();
     var writer = stdout.writer();
     try writer.print("Unit\n", .{});
     for (0..unit_range.count) |i| {
         const node_index = unit.node_ranges.items[i + unit_range.start];
-        try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, writer);
+        try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, false, writer);
+    }
+
+    var typechecker = TypeChecker.init(&unit);
+    for (0..unit_range.count) |i| {
+        const node_index = unit.node_ranges.items[i + unit_range.start];
+        _ = try typechecker.checkNode(node_index);
+        try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, true, writer);
     }
 
     var codegen = try cg.CodeGenerator.init(&unit);

@@ -24,7 +24,7 @@ typedef struct node {
 } Node;
 
 int main() {
-    return 1 - 2 + 3 - 4 + 7;
+    return 1 + 2u + 3uL + 4uLL + 5.0;
 // __DARWIN_ALIAS(fopen);
     // char *c = A(F((y + 2)));
 

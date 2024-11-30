@@ -384,17 +384,8 @@ pub const Node = extern struct {
         return current_index - relative_index;
     }
 
-    pub fn writeTree(index: NodeIndex, unit: *Unit, indent: u32, last: bool, writer: anytype) !void {
+    pub fn formatNode(index: NodeIndex, unit: *Unit, writer: anytype) !NodeRangeOrNode {
         const self = &unit.nodes.items[index];
-        for (0..indent) |_| {
-            _ = try writer.write("    ");
-        }
-        if (last) {
-            _ = try writer.write("\x1b[34m└── \x1b[0m");
-        } else {
-            _ = try writer.write("\x1b[34m├── \x1b[0m");
-        }
-
         var result = NodeRangeOrNode{ .none = {} };
         switch (self.kind) {
             .float_literal => try writer.print("\x1b[1;35mFloatLiteral\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.double}),
@@ -1050,19 +1041,41 @@ pub const Node = extern struct {
             },
             else => try writer.print("tbd {}", .{self.kind}),
         }
+
+        return result;
+    }
+
+    pub fn writeTree(index: NodeIndex, unit: *Unit, indent: u32, last: bool, with_types: bool, writer: anytype) !void {
+        for (0..indent) |_| {
+            _ = try writer.write("    ");
+        }
+        if (last) {
+            _ = try writer.write("\x1b[34m└── \x1b[0m");
+        } else {
+            _ = try writer.write("\x1b[34m├── \x1b[0m");
+        }
+
+        const result = try formatNode(index, unit, writer);
+        if (with_types) {
+            if (unit.node_to_type.get(index)) |ty| {
+                try writer.print(" : \x1b[1m", .{});
+                try unit.interner.printTyWriter(ty, writer);
+                try writer.print("\x1b[0m", .{});
+            }
+        }
         try writer.writeByte('\n');
 
         switch (result) {
             .none => {},
             .node => |idx| {
-                try writeTree(idx, unit, indent + 1, true, writer);
+                try writeTree(idx, unit, indent + 1, true, with_types, writer);
             },
             .node_range => |rng| {
                 for (rng.start..rng.start + rng.count) |i| {
                     const node_index = unit.node_ranges.items[i];
 
                     const is_last = i == rng.start + rng.count - 1;
-                    try writeTree(node_index, unit, indent + 1, is_last, writer);
+                    try writeTree(node_index, unit, indent + 1, is_last, with_types, writer);
                 }
             },
             .nodes => |rng| {
@@ -1070,17 +1083,17 @@ pub const Node = extern struct {
                     const node_index = rng.indicies[i];
 
                     const is_last = i == rng.count - 1;
-                    try writeTree(node_index, unit, indent + 1, is_last, writer);
+                    try writeTree(node_index, unit, indent + 1, is_last, with_types, writer);
                 }
             },
             .node_and_range => |rng| {
-                try writeTree(rng.node, unit, indent + 1, rng.range.count == 0, writer);
+                try writeTree(rng.node, unit, indent + 1, rng.range.count == 0, with_types, writer);
 
                 for (rng.range.start..rng.range.start + rng.range.count) |i| {
                     // const node_index = unit.node_ranges.items[i];
 
                     const is_last = i == rng.range.start + rng.range.count - 1;
-                    try writeTree(@truncate(i), unit, indent + 1, is_last, writer);
+                    try writeTree(@truncate(i), unit, indent + 1, is_last, with_types, writer);
                 }
             },
         }
@@ -1479,7 +1492,7 @@ pub const Parser = struct {
                 },
                 else => {
                     var writer = std.io.getStdOut().writer();
-                    Node.writeTree(type_node, self.unit, 0, true, &writer) catch @panic("");
+                    Node.writeTree(type_node, self.unit, 0, true, false, &writer) catch @panic("");
                     std.log.err("{s}, pos: {}", .{ self.tokenizer.unit.filePos(ptok.?.index)[0], self.tokenizer.unit.filePos(ptok.?.index)[1] });
                     std.debug.panic("TODO: unexpected token {}", .{ptok.?.token.kind});
                 },
@@ -3018,7 +3031,7 @@ pub const Parser = struct {
                                 },
                                 else => {
                                     var stdout = std.io.getStdOut().writer();
-                                    Node.writeTree(left, self.unit, 0, true, &stdout) catch @panic("err");
+                                    Node.writeTree(left, self.unit, 0, true, false, &stdout) catch @panic("err");
                                     std.debug.panic("TODO: Expected clsoe paren or comma found {}", .{ptok.?.token.kind});
                                 },
                             }

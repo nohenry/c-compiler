@@ -8,6 +8,7 @@ const FileIndex = @import("tokenizer.zig").FileIndexType;
 const TokenIndexType = @import("tokenizer.zig").TokenIndexType;
 const Node = @import("parser.zig").Node;
 const NodeIndex = @import("parser.zig").NodeIndex;
+const ty = @import("types.zig");
 
 pub const DefineValue = struct {
     range: TokenRange,
@@ -80,6 +81,9 @@ pub const Unit = struct {
     nodes: std.ArrayList(Node),
     node_ranges: std.ArrayList(NodeIndex),
 
+    interner: *ty.TypeInterner,
+    node_to_type: std.AutoHashMap(NodeIndex, ty.Type),
+
     defines: std.StringHashMap(DefineValue),
     define_fns: std.StringHashMap(DefineFunction),
 
@@ -99,6 +103,10 @@ pub const Unit = struct {
         include_dirs.append("/opt/homebrew/Cellar/llvm/18.1.7/lib/clang/18/include") catch @panic("OOM");
         include_dirs.append("/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk/usr/include") catch @panic("OOM");
 
+        const interner = allocator.create(ty.TypeInterner) catch @panic("OOM");
+        interner.* = ty.TypeInterner.init(allocator);
+        interner.setup();
+
         return .{
             .allocator = allocator,
             .files = files,
@@ -107,6 +115,8 @@ pub const Unit = struct {
 
             .nodes = std.ArrayList(Node).init(allocator),
             .node_ranges = std.ArrayList(NodeIndex).init(allocator),
+            .interner = interner,
+            .node_to_type = std.AutoHashMap(NodeIndex, ty.Type).init(allocator),
             .defines = std.StringHashMap(DefineValue).init(allocator),
             .define_fns = std.StringHashMap(DefineFunction).init(allocator),
             .include_dirs = include_dirs,
