@@ -29,7 +29,7 @@ struct node {
 int foobar(int, int, ...);
 
 int main(int *a, int c) {
-    int b = a[3];
+    int b = *a;
 
     // int i[2] = {1, 2};
     return 1 + 2u + 3uL + 4uLL + 5.0;

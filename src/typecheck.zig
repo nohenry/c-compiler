@@ -310,7 +310,7 @@ pub const TypeChecker = struct {
             },
             .unary_prefix_operator => blk: {
                 const expr_type = try self.checkNode(node.data.two.a, null);
-                const op: TokenKind = @enumFromInt(node.data.four.d);
+                const op: TokenKind = @enumFromInt(node.data.four.c);
                 switch (op) {
                     .plusplus,
                     .minusminus,
@@ -318,13 +318,21 @@ pub const TypeChecker = struct {
                     .minus,
                     .exclamation,
                     .tilde,
-                    .star,
                     => {
                         if (expr_type.isScalar()) break :blk expr_type;
 
                         std.debug.panic("Can't apply operator to type \x1b[1m{s}\x1b[0m", .{
                             self.unit.interner.printTyToStr(expr_type, self.unit.allocator),
                         });
+                    },
+                    .star => {
+                        if (expr_type.kind != .pointer) {
+                            std.debug.panic("Tried to dereference a non-pointer type: \x1b[1m{s}\x1b[0m", .{
+                                self.unit.interner.printTyToStr(expr_type, self.unit.allocator),
+                            });
+                        }
+
+                        break :blk expr_type.kind.pointer.base;
                     },
                     .ampersand => {
                         break :blk self.unit.interner.pointerTy(expr_type, 0);
