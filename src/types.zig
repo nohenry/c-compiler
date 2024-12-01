@@ -136,6 +136,10 @@ pub const TypeKind = struct {
     }
 };
 
+comptime {
+    @compileLog(@sizeOf(TypeKind));
+}
+
 pub const MultiType = struct { start: u32, len: u32 };
 pub const MultiTypeKeyed = struct { name: []const u8, ty: Type };
 
@@ -193,6 +197,8 @@ pub const Type = *const TypeKind;
 
 pub const TypeInterner = struct {
     unit: *Unit,
+    allocator: std.heap.MemoryPool(TypeKind),
+    type_pool: std.ArrayListUnmanaged(TypeKind),
     type_map: TypeMap,
     multi_types: std.ArrayList(Type),
     multi_types_keyed: std.ArrayList(std.StringArrayHashMap(Type)),
@@ -201,6 +207,8 @@ pub const TypeInterner = struct {
 
     pub fn init(unit: *Unit) Self {
         return .{
+            .allocator = .init(std.heap.page_allocator),
+            .type_pool = .{},
             .unit = unit,
             .type_map = undefined,
             .multi_types = std.ArrayList(Type).init(unit.allocator),
@@ -393,7 +401,7 @@ pub const TypeInterner = struct {
         self.multi_types.appendSlice(types) catch unreachable;
         const endi = self.multi_types.items.len;
 
-        const val = self.unit.allocator.create(TypeKind) catch unreachable;
+        const val = self.allocator.create() catch unreachable;
         val.kind = .{
             .multi_type_impl = .{
                 .start = @truncate(starti),
@@ -408,7 +416,7 @@ pub const TypeInterner = struct {
     }
 
     pub fn multiTyKeyed(self: *Self, values: std.StringArrayHashMap(Type)) Type {
-        const ty = self.types.getOrPut(.{ .multi_type_keyed = values }) catch unreachable;
+        const ty = self.type_map.getOrPut(.{ .kind = .{ .multi_type_keyed = values }, .qualifiers = 0 }) catch unreachable;
         if (ty.found_existing) {
             return ty.value_ptr.*;
         }
@@ -416,10 +424,11 @@ pub const TypeInterner = struct {
         const index = self.multi_types_keyed.items.len;
         self.multi_types_keyed.append(values) catch unreachable;
 
-        const val = self.allocator.create(TypeKind) catch unreachable;
-        val.* = .{
+        const val = self.allocator.create() catch unreachable;
+        val.kind = .{
             .multi_type_keyed_impl = index,
         };
+        val.qualifiers = 0;
 
         ty.value_ptr.* = val;
         return ty.value_ptr.*;
@@ -519,6 +528,7 @@ pub const TypeInterner = struct {
             .@"struct" => |rec| {
                 try writer.print("struct ", .{});
                 try writer.writeAll(self.unit.identifierAt(rec.name));
+                try writer.writeByte(' ');
                 try self.printTyWriter(rec.fields, writer);
             },
             .unnamed_union => |uni| {
@@ -528,6 +538,7 @@ pub const TypeInterner = struct {
             .@"union" => |uni| {
                 try writer.print("union", .{});
                 try writer.writeAll(self.unit.identifierAt(uni.name));
+                try writer.writeByte(' ');
                 try self.printTyWriter(uni.variants, writer);
             },
 
@@ -552,17 +563,16 @@ pub const TypeInterner = struct {
                 }, writer);
             },
             .multi_type_keyed => |kyd| {
-                try writer.print("{{", .{});
+                try writer.print("{{ ", .{});
                 var it = kyd.iterator();
 
                 if (it.next()) |val| {
                     try self.printTyWriter(val.value_ptr.*, writer);
-                    try writer.print(" {s}", .{val.key_ptr.*});
+                    try writer.print(" {s}; ", .{val.key_ptr.*});
                 }
                 while (it.next()) |val| {
-                    try writer.print(", ", .{});
                     try self.printTyWriter(val.value_ptr.*, writer);
-                    try writer.print(" {s}", .{val.key_ptr.*});
+                    try writer.print(" {s}; ", .{val.key_ptr.*});
                 }
                 try writer.print("}}", .{});
             },
@@ -597,7 +607,7 @@ pub const TypeInterner = struct {
             return ty.value_ptr.*;
         }
 
-        const val = self.unit.allocator.create(TypeKind) catch unreachable;
+        const val = self.allocator.create() catch unreachable;
         val.kind = value;
         val.qualifiers = qualifiers;
 
@@ -611,7 +621,7 @@ pub const TypeInterner = struct {
             return ty.value_ptr.*;
         }
 
-        const val = self.unit.allocator.create(TypeKind) catch unreachable;
+        const val = self.allocator.create() catch unreachable;
         val.* = value;
 
         ty.value_ptr.* = val;

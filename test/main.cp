@@ -19,12 +19,16 @@
 // #define FOO(e) e ? BAR(#e, 1, 2) : false
 // #define F(f, x, y) (f, x, y)
 
-typedef struct node {
-    struct node n;
-} Node;
+struct node {
+    int f;
+    union {
+        float f1;
+    };
+};
 
 int main(int a, int) {
     char *c = "foobar";
+    struct node n;
     // int i[2] = {1, 2};
     return 1 + 2u + 3uL + 4uLL + 5.0;
 // __DARWIN_ALIAS(fopen);

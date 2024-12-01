@@ -547,6 +547,11 @@ pub const TypeChecker = struct {
 
                 return self.unit.interner.voidTy();
             },
+            .@"struct", .struct_ident, .struct_forward => {
+                _ = try self.checkNodeType(nidx);
+
+                return self.unit.interner.voidTy();
+            },
             else => {
                 std.log.warn("Skipping node {}", .{nidx});
                 return self.unit.interner.voidTy();
@@ -741,9 +746,51 @@ pub const TypeChecker = struct {
                 self.unit.symbol_table.putSymbol(ident_str, .{ .nidx = nidx });
                 const param_ty = try self.checkNodeTypeImpl(ty_index, null);
                 try self.unit.declared_type.put(nidx, param_ty);
+                // std.heap.MemoryPool(Type).
                 break :blk param_ty;
             },
 
+            .struct_ident => blk: {
+                const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
+                const member_range = self.unit.nodes.items[nidx - 1];
+                std.debug.assert(member_range.kind == .range);
+
+                var index = member_range.data.two.a;
+                const end_index = index + member_range.data.two.b;
+
+                var members = std.StringArrayHashMap(Type).init(self.unit.allocator);
+
+                while (index < end_index) : (index += 1) {
+                    const member_node_index = self.unit.node_ranges.items[index];
+                    const member_node = &self.unit.nodes.items[member_node_index];
+                    switch (member_node.kind) {
+                        .member => {
+                            const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
+                            _ = ty;
+                        },
+                        .member_ident => {
+                            const member_ident_str = self.unit.identifierAt(@bitCast(member_node.data.two.a));
+                            const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
+                            try members.put(member_ident_str, ty);
+                        },
+                        else => {},
+                    }
+                }
+
+                const result_ty = self.unit.interner.structTy(@bitCast(node.data.two.a), members, 0);
+                try self.unit.declared_type.put(nidx, result_ty);
+                self.unit.symbol_table.putTypeSymbol(ident_str, .{ .nidx = nidx });
+                break :blk result_ty;
+            },
+            .struct_forward => {
+                const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
+                const sym = self.unit.symbol_table.searchTypeSymbol(ident_str) orelse {
+                    std.debug.panic("Struct \x1b[1m'{s}'\x1b[0m is not defined", .{ident_str});
+                };
+
+                try self.unit.node_to_node.put(nidx, sym.nidx);
+                return self.unit.declared_type.get(sym.nidx).?;
+            },
             else => {
                 std.log.warn("Skipping node {}", .{nidx});
                 return self.unit.interner.voidTy();

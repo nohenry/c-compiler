@@ -626,7 +626,8 @@ pub const SymbolTable = struct {
     pub fn init(allocator: std.mem.Allocator) Self {
         var symbol_stack = std.ArrayList(SymbolScope).init(allocator);
         symbol_stack.append(.{
-            .symbols = std.StringHashMap(Symbol).init(allocator),
+            .decl_symbols = std.StringHashMap(Symbol).init(allocator),
+            .type_symbols = std.StringHashMap(Symbol).init(allocator),
         }) catch @panic("OOM");
 
         return .{
@@ -636,7 +637,8 @@ pub const SymbolTable = struct {
 
     pub fn pushScope(self: *Self) void {
         self.symbol_stack.append(.{
-            .symbols = std.StringHashMap(Symbol).init(self.symbol_stack.allocator),
+            .decl_symbols = std.StringHashMap(Symbol).init(self.symbol_stack.allocator),
+            .type_symbols = std.StringHashMap(Symbol).init(self.symbol_stack.allocator),
         }) catch @panic("OOM");
     }
 
@@ -653,7 +655,7 @@ pub const SymbolTable = struct {
             //     std.log.info("Sym {s}: {}", .{ sym.key_ptr.*, sym.value_ptr.* });
             // }
 
-            if (self.symbol_stack.items[i].symbols.get(name)) |sym| {
+            if (self.symbol_stack.items[i].decl_symbols.get(name)) |sym| {
                 return sym;
             }
         }
@@ -662,12 +664,34 @@ pub const SymbolTable = struct {
     }
 
     pub fn putSymbol(self: *const Self, name: []const u8, sym: Symbol) void {
-        self.symbol_stack.items[self.symbol_stack.items.len - 1].symbols.put(name, sym) catch @panic("OOM");
+        self.symbol_stack.items[self.symbol_stack.items.len - 1].decl_symbols.put(name, sym) catch @panic("OOM");
+    }
+
+    pub fn searchTypeSymbol(self: *const Self, name: []const u8) ?Symbol {
+        var i = self.symbol_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            // var it = self.symbol_stack.items[i].symbols.iterator();
+            // while (it.next()) |sym| {
+            //     std.log.info("Sym {s}: {}", .{ sym.key_ptr.*, sym.value_ptr.* });
+            // }
+
+            if (self.symbol_stack.items[i].type_symbols.get(name)) |sym| {
+                return sym;
+            }
+        }
+
+        return null;
+    }
+
+    pub fn putTypeSymbol(self: *const Self, name: []const u8, sym: Symbol) void {
+        self.symbol_stack.items[self.symbol_stack.items.len - 1].type_symbols.put(name, sym) catch @panic("OOM");
     }
 };
 
 pub const SymbolScope = struct {
-    symbols: std.StringHashMap(Symbol),
+    decl_symbols: std.StringHashMap(Symbol),
+    type_symbols: std.StringHashMap(Symbol),
 };
 
 pub const Symbol = struct {
