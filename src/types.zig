@@ -4,8 +4,14 @@ const TokenIndex = @import("tokenizer.zig").TokenIndex;
 const NodeIndex = @import("parser.zig").NodeIndex;
 const TypeQualifier = @import("parser.zig").TypeQualifier;
 
+pub const TypeFlags = struct {
+    pub const Type = u8;
+    pub const Variadic: TypeFlags.Type = (1 << 0);
+};
+
 pub const TypeKind = struct {
     qualifiers: TypeQualifier.Type,
+    flags: TypeFlags.Type = 0,
     kind: union(enum) {
         void: void,
         char: bool,
@@ -458,18 +464,22 @@ pub const TypeInterner = struct {
         return self.multi_types.items[multi_type.kind.multi_type_impl.start .. multi_type.kind.multi_type_impl.start + multi_type.kind.multi_type_impl.len];
     }
 
-    pub fn funcTyNoParams(self: *Self, ret_ty: Type) Type {
-        return self.funcTy(&.{}, ret_ty);
+    pub fn funcTyNoParams(self: *Self, ret_ty: Type, variadic: bool) Type {
+        return self.funcTy(&.{}, ret_ty, variadic);
     }
-    pub fn funcTy(self: *Self, param_tys: []const Type, ret_ty: Type) Type {
+    pub fn funcTy(self: *Self, param_tys: []const Type, ret_ty: Type, variadic: bool) Type {
         const param_multi_ty = self.multiTy(param_tys);
 
-        return self.createOrGetTy(.{
-            .func = .{
-                .params = param_multi_ty,
-                .ret_ty = ret_ty,
+        return self.createOrGetTyKind(.{
+            .kind = .{
+                .func = .{
+                    .params = param_multi_ty,
+                    .ret_ty = ret_ty,
+                },
             },
-        }, 0);
+            .qualifiers = 0,
+            .flags = if (variadic) TypeFlags.Variadic else 0,
+        });
     }
 
     pub fn printTyToStr(self: *const Self, ty: Type, allocator: std.mem.Allocator) []const u8 {
@@ -541,26 +551,30 @@ pub const TypeInterner = struct {
                 try writer.print("]", .{});
             },
             .unnamed_struct => |rec| {
-                try writer.print("struct ({})", .{rec.nidx});
+                try writer.print("struct ({}) {{ ", .{rec.nidx});
                 try self.printTyWriter(rec.fields, true, writer);
+                try writer.print("}}", .{});
             },
             .@"struct" => |rec| {
                 try writer.print("struct ", .{});
                 const tok_index = self.unit.nodes.items[rec.nidx].data.two.a;
                 try writer.writeAll(self.unit.identifierAt(@bitCast(tok_index)));
-                try writer.writeByte(' ');
+                try writer.print(" {{ ", .{});
                 try self.printTyWriter(rec.fields, true, writer);
+                try writer.print("}}", .{});
             },
             .unnamed_union => |uni| {
-                try writer.print("union ({}) ", .{uni.nidx});
+                try writer.print("union ({}) {{ ", .{uni.nidx});
                 try self.printTyWriter(uni.variants, true, writer);
+                try writer.print("}}", .{});
             },
             .@"union" => |uni| {
                 try writer.print("union", .{});
                 const tok_index = self.unit.nodes.items[uni.nidx].data.two.a;
                 try writer.writeAll(self.unit.identifierAt(@bitCast(tok_index)));
-                try writer.writeByte(' ');
+                try writer.print(" {{ ", .{});
                 try self.printTyWriter(uni.variants, true, writer);
+                try writer.print("}}", .{});
             },
 
             .field => |fld| {
@@ -581,7 +595,6 @@ pub const TypeInterner = struct {
 
             .multi_type => |tys| {
                 if (multi_struct) {
-                    try writer.print("{{ ", .{});
                     if (tys.len > 0) {
                         try self.printTyWriter(tys[0], false, writer);
                         try writer.print("; ", .{});
@@ -591,9 +604,7 @@ pub const TypeInterner = struct {
                             try writer.print("; ", .{});
                         }
                     }
-                    try writer.print("}}", .{});
                 } else {
-                    try writer.print("(", .{});
                     if (tys.len > 0) {
                         try self.printTyWriter(tys[0], false, writer);
 
@@ -602,7 +613,6 @@ pub const TypeInterner = struct {
                             try self.printTyWriter(mty, false, writer);
                         }
                     }
-                    try writer.print(")", .{});
                 }
             },
             .multi_type_impl => |mty| {
@@ -638,7 +648,12 @@ pub const TypeInterner = struct {
             .func => |func| {
                 try self.printTyWriter(func.ret_ty, false, writer);
                 try writer.print(" ", .{});
+                try writer.print("(", .{});
                 try self.printTyWriter(func.params, false, writer);
+                if ((ty.flags & TypeFlags.Variadic) > 0) {
+                    try writer.print(", ...", .{});
+                }
+                try writer.print(")", .{});
             },
         }
     }

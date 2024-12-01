@@ -30,9 +30,9 @@ pub const NodeKind = enum(u32) {
     unary_prefix_operator,
     /// node_data: a(u32) = index of expr, c(u16) = operator
     unary_suffix_operator,
-    /// node_data: a(u32) = relative index of invokee
+    /// node_data: a(u32) = index of invokee
     invoke,
-    /// node_data: a(u16) = relative index of invokee, b(u32) = arg_index
+    /// node_data: a(u32) = index of invokee, b(u32) = arg_index
     invoke_one_arg,
     /// node_data: a(u16) = relative index of invokee, b(u16) = count, c(u32) = start index of parameters
     invoke_args,
@@ -819,7 +819,7 @@ pub const Node = extern struct {
             },
             .invoke_one_arg => {
                 const expr = self.data.as(.two).a;
-                const arg = self.data.as(.two).a;
+                const arg = self.data.as(.two).b;
 
                 try writer.print("\x1b[1;35mInvoke\x1b[0m", .{});
 
@@ -3076,7 +3076,7 @@ pub const Parser = struct {
                                 .kind = .invoke,
                                 .data = unary_data,
                             });
-                        } else if (these_nodes.items.len == 0) {
+                        } else if (these_nodes.items.len == 1) {
                             unary_data.as(.two).a = left;
                             unary_data.as(.two).b = these_nodes.items[0];
 

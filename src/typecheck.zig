@@ -3,6 +3,7 @@ const Unit = @import("unit.zig").Unit;
 const NodeIndex = @import("parser.zig").NodeIndex;
 const Node = @import("parser.zig").Node;
 const Type = @import("types.zig").Type;
+const TypeFlags = @import("types.zig").TypeFlags;
 const TokenKind = @import("tokenizer.zig").TokenKind;
 const TokenIndex = @import("tokenizer.zig").TokenIndex;
 const TypeQualifier = @import("parser.zig").TypeQualifier;
@@ -348,6 +349,124 @@ pub const TypeChecker = struct {
                         });
                     },
                     else => unreachable,
+                }
+            },
+            .invoke => blk: {
+                const expr_type = try self.checkNode(node.data.two.a, null);
+                if (expr_type.kind != .func) {
+                    std.debug.panic("Tried to call a value that's not a function (type \x1b[31m{s}\x1b[0m)", .{
+                        self.unit.interner.printTyToStr(expr_type, self.unit.allocator),
+                    });
+                }
+                break :blk expr_type.kind.func.ret_ty;
+            },
+            .invoke_one_arg => blk: {
+                const expr_type = try self.checkNode(node.data.two.a, null);
+                const arg_type = try self.checkNode(node.data.two.b, null);
+                if (expr_type.kind != .func) {
+                    std.debug.panic("Tried to call a value that's not a function (type \x1b[31m{s}\x1b[0m)", .{
+                        self.unit.interner.printTyToStr(expr_type, self.unit.allocator),
+                    });
+                }
+                const param_types = self.unit.interner.getMultiTypes(expr_type.kind.func.params);
+
+                if (param_types.len == 1) {
+                    if (self.implicitlyCast(arg_type, param_types[0])) |ty| {
+                        _ = ty;
+                    } else {
+                        std.debug.panic("Function expected type \x1b[32m{s}\x1b[0m for first argument but got \x1b[32m{s}\x1b[0m instead", .{
+                            self.unit.interner.printTyToStr(param_types[0], self.unit.allocator),
+                            self.unit.interner.printTyToStr(arg_type, self.unit.allocator),
+                        });
+                    }
+                } else if (param_types.len == 0 and (expr_type.flags & TypeFlags.Variadic) > 0) {} else {
+                    std.debug.panic("Function expected {} arguments but received 1", .{param_types.len});
+                }
+
+                break :blk expr_type.kind.func.ret_ty;
+            },
+            .invoke_args => blk: {
+                const expr_type = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.a), null);
+                const arg_start = node.data.two.b;
+                const arg_count = node.data.four.b;
+
+                if (expr_type.kind != .func) {
+                    std.debug.panic("Tried to call a value that's not a function (type \x1b[31m{s}\x1b[0m)", .{
+                        self.unit.interner.printTyToStr(expr_type, self.unit.allocator),
+                    });
+                }
+                const param_types = self.unit.interner.getMultiTypes(expr_type.kind.func.params);
+
+                // ex == pr !var 1
+                // ex == pr var  1
+                // ex < pr !var  0
+                // ex < pr var   1
+                // ex > pr !var  0
+                // ex > pr var   0
+
+                var index = arg_start;
+                const end_index = index + param_types.len;
+                const arg_end_index = index + arg_count;
+                var count: u32 = 0;
+
+                while (index < end_index) : ({
+                    index += 1;
+                    count += 1;
+                }) {
+                    const node_index = self.unit.node_ranges.items[index];
+                    const provided_type = try self.checkNode(node_index, param_types[count]);
+
+                    if (self.implicitlyCast(provided_type, param_types[count])) |ty| {
+                        _ = ty;
+                    } else {
+                        std.debug.panic("Function expected type \x1b[32m{s}\x1b[0m for argument {} but got \x1b[32m{s}\x1b[0m instead", .{
+                            self.unit.interner.printTyToStr(param_types[count], self.unit.allocator),
+                            count,
+                            self.unit.interner.printTyToStr(provided_type, self.unit.allocator),
+                        });
+                    }
+                }
+
+                if (param_types.len == arg_count) {} else if (param_types.len < arg_count and (expr_type.flags & TypeFlags.Variadic) > 0) {} else {
+                    std.debug.panic("Function expected {} arguments but received {}", .{ param_types.len, arg_count });
+                }
+
+                while (index < arg_end_index) : ({
+                    index += 1;
+                    count += 1;
+                }) {
+                    const node_index = self.unit.node_ranges.items[index];
+                    const provided_type = try self.checkNode(node_index, null);
+                    _ = provided_type;
+                }
+
+                break :blk expr_type.kind.func.ret_ty;
+            },
+            .index => blk: {
+                const ptr_type = try self.checkNode(node.data.two.a, null);
+                const expr_type = try self.checkNode(node.data.two.b, null);
+
+                if (self.implicitlyCast(expr_type, self.unit.interner.longlongTy(true, 0))) |_| {} else {
+                    std.debug.panic("Expected integral type for pointer index but found \x1b[32m{s}\x1b[0m", .{
+                        self.unit.interner.printTyToStr(expr_type, self.unit.allocator),
+                    });
+                }
+
+                switch (ptr_type.kind) {
+                    .pointer => |ptr| {
+                        break :blk ptr.base;
+                    },
+                    .array => |ptr| {
+                        break :blk ptr.base;
+                    },
+                    .array_unsized => |ptr| {
+                        break :blk ptr.base;
+                    },
+                    else => {
+                        std.debug.panic("Expected indexable type such as pointer or array but found \x1b[32m{s}\x1b[0m", .{
+                            self.unit.interner.printTyToStr(ptr_type, self.unit.allocator),
+                        });
+                    },
                 }
             },
             .cast => blk: {
@@ -731,19 +850,20 @@ pub const TypeChecker = struct {
             .function_type => blk: {
                 const ret_ty_index = Node.absoluteIndex(nidx, node.data.four.a);
                 const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, null);
-                var fun_ty = self.unit.interner.funcTyNoParams(ret_ty);
+                var fun_ty = self.unit.interner.funcTyNoParams(ret_ty, false);
                 if (last_type) |last| {
                     const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
 
                     fun_ty = self.unit.interner.funcTyNoParams(
                         self.unit.interner.rebasePointerRecursive(last.*, ret_ty_base)[0],
+                        false,
                     );
 
                     break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
                 } else if (ret_ty.kind == .pointer) {
                     const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
 
-                    fun_ty = self.unit.interner.funcTyNoParams(ret_ty_base);
+                    fun_ty = self.unit.interner.funcTyNoParams(ret_ty_base, false);
                     break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
                 }
 
@@ -753,15 +873,28 @@ pub const TypeChecker = struct {
                 const ret_ty_index = Node.absoluteIndex(nidx, node.data.four.a);
                 const param_index = Node.absoluteIndex(nidx, node.data.four.b);
                 const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, null);
-                const param_ty = try self.checkNodeTypeImpl(param_index, null);
-                var fun_ty = self.unit.interner.funcTy(&.{param_ty}, ret_ty);
+
+                var param_buf = [1]Type{undefined};
+                const param_tys, const variadic = if (self.unit.nodes.items[param_index].kind == .parameter_ellipsis) .{
+                    param_buf[0..0],
+                    true,
+                } else .{
+                    blk1: {
+                        param_buf[0] = try self.checkNodeTypeImpl(param_index, null);
+                        break :blk1 param_buf[0..1];
+                    },
+                    false,
+                };
+
+                var fun_ty = self.unit.interner.funcTy(param_tys, ret_ty, variadic);
 
                 if (last_type) |last| {
                     const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
 
                     fun_ty = self.unit.interner.funcTy(
-                        &.{param_ty},
+                        param_tys,
                         self.unit.interner.rebasePointerRecursive(last.*, ret_ty_base)[0],
+                        variadic,
                     );
 
                     break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
@@ -769,8 +902,9 @@ pub const TypeChecker = struct {
                     const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
 
                     fun_ty = self.unit.interner.funcTy(
-                        &.{param_ty},
+                        param_tys,
                         ret_ty_base,
+                        variadic,
                     );
                     break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
                 }
@@ -784,13 +918,18 @@ pub const TypeChecker = struct {
                 const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, null);
                 const end_index = param_index + param_count;
 
+                var variadic = false;
                 var params = std.ArrayList(Type).init(self.unit.allocator);
                 while (param_index < end_index) : (param_index += 1) {
                     const node_index = self.unit.node_ranges.items[param_index];
+                    if (self.unit.nodes.items[node_index].kind == .parameter_ellipsis) {
+                        variadic = true;
+                        break;
+                    }
                     try params.append(try self.checkNodeTypeImpl(node_index, null));
                 }
 
-                var fun_ty = self.unit.interner.funcTy(params.items, ret_ty);
+                var fun_ty = self.unit.interner.funcTy(params.items, ret_ty, variadic);
 
                 if (last_type) |last| {
                     const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
@@ -798,6 +937,7 @@ pub const TypeChecker = struct {
                     fun_ty = self.unit.interner.funcTy(
                         params.items,
                         self.unit.interner.rebasePointerRecursive(last.*, ret_ty_base)[0],
+                        variadic,
                     );
 
                     break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
@@ -807,6 +947,7 @@ pub const TypeChecker = struct {
                     fun_ty = self.unit.interner.funcTy(
                         params.items,
                         ret_ty_base,
+                        variadic,
                     );
                     break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
                 }
@@ -863,6 +1004,15 @@ pub const TypeChecker = struct {
                 const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
                 const sym = self.unit.symbol_table.searchTypeSymbol(ident_str) orelse {
                     std.debug.panic("Struct \x1b[1m'{s}'\x1b[0m is not defined", .{ident_str});
+                };
+
+                try self.unit.node_to_node.put(nidx, sym.nidx);
+                return self.unit.declared_type.get(sym.nidx).?;
+            },
+            .union_forward => {
+                const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
+                const sym = self.unit.symbol_table.searchTypeSymbol(ident_str) orelse {
+                    std.debug.panic("Union \x1b[1m'{s}'\x1b[0m is not defined", .{ident_str});
                 };
 
                 try self.unit.node_to_node.put(nidx, sym.nidx);

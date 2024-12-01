@@ -26,12 +26,11 @@ struct node {
     } i;
 };
 
-int main(int a, int) {
-    char *c = "foobar";
-    struct { int a; } b;
-    struct node *n;
-    // int i = n.i.f;
-    int i = n->f;
+int foobar(int, int, ...);
+
+int main(int *a, int c) {
+    int b = a[3];
+
     // int i[2] = {1, 2};
     return 1 + 2u + 3uL + 4uLL + 5.0;
 // __DARWIN_ALIAS(fopen);
