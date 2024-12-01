@@ -121,8 +121,86 @@ pub const TypeChecker = struct {
 
                     const field_str = self.unit.identifierAt(@bitCast(right_node.data.two.a));
 
-                    if (left.getStructureField(field_str)) |field_ty| {
-                        break :blk field_ty;
+                    switch (left.kind) {
+                        .@"struct", .@"union", .unnamed_struct, .unnamed_union => {
+                            const st_nidx, const fields_multi_type = switch (left.kind) {
+                                .@"struct" => |s| .{ s.nidx, s.fields },
+                                .unnamed_struct => |s| .{ s.nidx, s.fields },
+                                .@"union" => |s| .{ s.nidx, s.variants },
+                                .unnamed_union => |s| .{ s.nidx, s.variants },
+                                else => unreachable,
+                            };
+                            const field_map = self.unit.field_map.getPtr(st_nidx).?;
+                            const field_index = field_map.get(field_str) orelse {
+                                std.debug.panic("Field \x1b[1m'{s}'\x1b[0m does not exist in type \x1b[32m{s}\x1b[0m", .{
+                                    field_str,
+                                    self.unit.interner.printTyToStr(left, self.unit.allocator),
+                                });
+                            };
+                            const field_tys = self.unit.interner.getMultiTypes(fields_multi_type);
+                            const field = field_tys[field_index];
+                            switch (field.kind) {
+                                .bitfield => {
+                                    break :blk field.kind.bitfield.base;
+                                },
+                                .bitfield_named => {
+                                    break :blk field.kind.bitfield_named.base;
+                                },
+                                else => break :blk field,
+                            }
+                        },
+                        else => {},
+                    }
+
+                    std.debug.panic("Structured type does not contain field \x1b[1m{s}\x1b[0m", .{field_str});
+
+                    break :blk;
+                } else if (op == .arrow) {
+                    if (left.kind != .pointer) {
+                        std.debug.panic("Left side is not a pointer to structure type!!!!", .{});
+                    }
+
+                    const struct_type = left.kind.pointer.base;
+                    if (!struct_type.isStructured()) {
+                        std.debug.panic("Left side is not a pointer to structure type!!!!", .{});
+                    }
+
+                    const right_node = &self.unit.nodes.items[Node.absoluteIndex(nidx, node.data.four.c)];
+                    if (right_node.kind != .identifier) { // TODO: what if field is typename??
+                        std.debug.panic("Right side is not a identifier!!!!", .{});
+                    }
+
+                    const field_str = self.unit.identifierAt(@bitCast(right_node.data.two.a));
+
+                    switch (struct_type.kind) {
+                        .@"struct", .@"union", .unnamed_struct, .unnamed_union => {
+                            const st_nidx, const fields_multi_type = switch (struct_type.kind) {
+                                .@"struct" => |s| .{ s.nidx, s.fields },
+                                .unnamed_struct => |s| .{ s.nidx, s.fields },
+                                .@"union" => |s| .{ s.nidx, s.variants },
+                                .unnamed_union => |s| .{ s.nidx, s.variants },
+                                else => unreachable,
+                            };
+                            const field_map = self.unit.field_map.getPtr(st_nidx).?;
+                            const field_index = field_map.get(field_str) orelse {
+                                std.debug.panic("Field \x1b[1m'{s}'\x1b[0m does not exist in type \x1b[32m{s}\x1b[0m", .{
+                                    field_str,
+                                    self.unit.interner.printTyToStr(struct_type, self.unit.allocator),
+                                });
+                            };
+                            const field_tys = self.unit.interner.getMultiTypes(fields_multi_type);
+                            const field = field_tys[field_index];
+                            switch (field.kind) {
+                                .bitfield => {
+                                    break :blk field.kind.bitfield.base;
+                                },
+                                .bitfield_named => {
+                                    break :blk field.kind.bitfield_named.base;
+                                },
+                                else => break :blk field,
+                            }
+                        },
+                        else => {},
                     }
 
                     std.debug.panic("Structured type does not contain field \x1b[1m{s}\x1b[0m", .{field_str});
@@ -750,36 +828,35 @@ pub const TypeChecker = struct {
                 break :blk param_ty;
             },
 
-            .struct_ident => blk: {
-                const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
-                const member_range = self.unit.nodes.items[nidx - 1];
-                std.debug.assert(member_range.kind == .range);
+            .@"struct", .@"union" => blk: {
+                const member_range = node.data;
+                const members = try self.checkStructured(nidx, member_range.two.a, member_range.two.a + member_range.two.b);
+                defer members.deinit();
 
-                var index = member_range.data.two.a;
-                const end_index = index + member_range.data.two.b;
-
-                var members = std.StringArrayHashMap(Type).init(self.unit.allocator);
-
-                while (index < end_index) : (index += 1) {
-                    const member_node_index = self.unit.node_ranges.items[index];
-                    const member_node = &self.unit.nodes.items[member_node_index];
-                    switch (member_node.kind) {
-                        .member => {
-                            const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
-                            _ = ty;
-                        },
-                        .member_ident => {
-                            const member_ident_str = self.unit.identifierAt(@bitCast(member_node.data.two.a));
-                            const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
-                            try members.put(member_ident_str, ty);
-                        },
-                        else => {},
-                    }
-                }
-
-                const result_ty = self.unit.interner.structTy(@bitCast(node.data.two.a), members, 0);
+                const result_ty = if (node.kind == .@"struct")
+                    self.unit.interner.unnamedStructTy(nidx, members.items, 0)
+                else
+                    self.unit.interner.unnamedUnionTy(nidx, members.items, 0);
                 try self.unit.declared_type.put(nidx, result_ty);
+                break :blk result_ty;
+            },
+
+            .struct_ident, .union_ident => blk: {
+                std.debug.assert(self.unit.nodes.items[nidx - 1].kind == .range);
+                const member_range = self.unit.nodes.items[nidx - 1].data;
+
+                const members = try self.checkStructured(nidx, member_range.two.a, member_range.two.a + member_range.two.b);
+                defer members.deinit();
+
+                const result_ty = if (node.kind == .struct_ident)
+                    self.unit.interner.structTy(nidx, members.items, 0)
+                else
+                    self.unit.interner.unionTy(nidx, members.items, 0);
+
+                try self.unit.declared_type.put(nidx, result_ty);
+                const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
                 self.unit.symbol_table.putTypeSymbol(ident_str, .{ .nidx = nidx });
+
                 break :blk result_ty;
             },
             .struct_forward => {
@@ -800,6 +877,67 @@ pub const TypeChecker = struct {
         self.unit.node_to_type.put(nidx, result) catch @panic("OOM");
 
         return result;
+    }
+
+    pub fn checkStructured(self: *Self, nidx: NodeIndex, start_index: NodeIndex, end_index: NodeIndex) !std.ArrayList(Type) {
+        var index = start_index;
+
+        var members = std.ArrayList(Type).init(self.unit.allocator);
+        var field_mapping = std.StringHashMap(u32).init(self.unit.allocator);
+
+        var field_count: u32 = 0;
+        while (index < end_index) : ({
+            index += 1;
+            field_count += 1;
+        }) {
+            const member_node_index = self.unit.node_ranges.items[index];
+            const member_node = &self.unit.nodes.items[member_node_index];
+            switch (member_node.kind) {
+                .member => {
+                    const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
+                    try members.append(ty);
+                },
+                .member_bitfield => {
+                    const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
+                    const bitfield_index = Node.absoluteIndex(member_node_index, member_node.data.four.d);
+                    var eval = SimpleEvaluator.init(self.unit);
+                    const bitfield_value = try eval.evalNode(bitfield_index);
+
+                    try members.append(self.unit.interner.createOrGetTy(.{
+                        .bitfield = .{
+                            .base = ty,
+                            .bits = @truncate(bitfield_value.int_value),
+                        },
+                    }, 0));
+                },
+                .member_ident => {
+                    const member_ident_str = self.unit.identifierAt(@bitCast(member_node.data.two.a));
+                    const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
+                    try members.append(ty);
+                    try field_mapping.put(member_ident_str, field_count);
+                },
+                .member_ident_bitfield => {
+                    const member_ident_str = self.unit.identifierAt(@bitCast(member_node.data.two.a));
+                    const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
+                    const bitfield_index = Node.absoluteIndex(member_node_index, member_node.data.four.d);
+                    var eval = SimpleEvaluator.init(self.unit);
+                    const bitfield_value = try eval.evalNode(bitfield_index);
+
+                    try members.append(self.unit.interner.createOrGetTy(.{
+                        .bitfield = .{
+                            .base = ty,
+                            .bits = @truncate(bitfield_value.int_value),
+                        },
+                    }, 0));
+                    try field_mapping.put(member_ident_str, field_count);
+                },
+                else => {},
+            }
+        }
+
+        try self.unit.field_map.put(nidx, field_mapping);
+
+        return members;
     }
 
     pub fn implicitlyCast(self: *Self, from: Type, to: Type) ?Type {
@@ -838,9 +976,9 @@ pub const TypeChecker = struct {
         } else if (from.isArithmetic() and to.isArithmetic())
             return to
         else if (from.kind == .@"struct" and to.kind == .@"struct") {
-            return if (@as(u32, @bitCast(from.kind.@"struct".name)) == @as(u32, @bitCast(to.kind.@"struct".name))) from else null;
+            return if (@as(u32, @bitCast(from.kind.@"struct".nidx)) == @as(u32, @bitCast(to.kind.@"struct".nidx))) from else null;
         } else if (from.kind == .@"union" and to.kind == .@"union") {
-            return if (@as(u32, @bitCast(from.kind.@"union".name)) == @as(u32, @bitCast(to.kind.@"union".name))) from else null;
+            return if (@as(u32, @bitCast(from.kind.@"union".nidx)) == @as(u32, @bitCast(to.kind.@"union".nidx))) from else null;
         } else if (from.kind == .unnamed_struct and to.kind == .unnamed_struct) {
             return if (from.kind.unnamed_struct.nidx == to.kind.unnamed_struct.nidx) from else null;
         } else if (from.kind == .unnamed_union and to.kind == .unnamed_union) {

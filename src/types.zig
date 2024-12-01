@@ -28,7 +28,7 @@ pub const TypeKind = struct {
             fields: Type,
         },
         @"struct": struct {
-            name: TokenIndex,
+            nidx: NodeIndex,
             fields: Type,
         },
         unnamed_union: struct {
@@ -36,18 +36,34 @@ pub const TypeKind = struct {
             variants: Type,
         },
         @"union": struct {
-            name: TokenIndex,
+            nidx: NodeIndex,
             variants: Type,
+        },
+
+        field: struct {
+            name: StringInterner.Index,
+            ty: Type,
+        },
+
+        bitfield_named: struct {
+            name: StringInterner.Index,
+            bits: u32,
+            base: Type,
+        },
+
+        bitfield: struct {
+            base: Type,
+            bits: u32,
         },
 
         multi_type: []const Type,
         multi_type_impl: MultiType,
-        multi_type_keyed: std.StringArrayHashMap(Type),
-        multi_type_keyed_impl: usize,
+        // multi_type_keyed: std.StringArrayHashMap(Type),
+        // multi_type_keyed_impl: usize,
 
         func: struct {
             params: Type,
-            ret_ty: ?Type,
+            ret_ty: Type,
         },
     },
 
@@ -70,19 +86,20 @@ pub const TypeKind = struct {
     }
 
     pub fn getStructureField(self: *const @This(), field_name: []const u8) ?Type {
+        _ = field_name;
         return switch (self.kind) {
-            .@"struct" => |st| {
-                return st.fields.kind.multi_type_keyed.get(field_name);
-            },
-            .unnamed_struct => |st| {
-                return st.fields.kind.multi_type_keyed.get(field_name);
-            },
-            .@"union" => |st| {
-                return st.variants.kind.multi_type_keyed.get(field_name);
-            },
-            .unnamed_union => |st| {
-                return st.variants.kind.multi_type_keyed.get(field_name);
-            },
+            // .@"struct" => |st| {
+            //     return st.fields.kind.multi_type_keyed.get(field_name);
+            // },
+            // .unnamed_struct => |st| {
+            //     return st.fields.kind.multi_type_keyed.get(field_name);
+            // },
+            // .@"union" => |st| {
+            //     return st.variants.kind.multi_type_keyed.get(field_name);
+            // },
+            // .unnamed_union => |st| {
+            //     return st.variants.kind.multi_type_keyed.get(field_name);
+            // },
             // .@"struct", .unnamed_struct, .@"union", .unnamed_union => true,
             else => unreachable,
         };
@@ -136,9 +153,10 @@ pub const TypeKind = struct {
     }
 };
 
-comptime {
-    @compileLog(@sizeOf(TypeKind));
-}
+// comptime {
+//     @compileLog(@sizeOf(TypeKind));
+//     @compileLog(@sizeOf(std.meta.FieldType(TypeKind, .kind)));
+// }
 
 pub const MultiType = struct { start: u32, len: u32 };
 pub const MultiTypeKeyed = struct { name: []const u8, ty: Type };
@@ -161,26 +179,26 @@ pub const TypeMapContext = struct {
 
                 return std.mem.eql(Type, vals, ctx.interner.multi_types.items[ind.start .. ind.start + ind.len]);
             },
-            .multi_type_keyed => |vals| {
-                if (b.kind != .multi_type_keyed_impl) return false;
+            // .multi_type_keyed => |vals| {
+            //     if (b.kind != .multi_type_keyed_impl) return false;
 
-                const bmap = &ctx.interner.multi_types_keyed.items[b.kind.multi_type_keyed_impl];
-                if (vals.count() != bmap.count()) return false;
+            //     const bmap = &ctx.interner.multi_types_keyed.items[b.kind.multi_type_keyed_impl];
+            //     if (vals.count() != bmap.count()) return false;
 
-                var ait = vals.iterator();
-                var bit = bmap.iterator();
-                var aval = ait.next();
-                var bval = bit.next();
-                while (aval != null and bval != null) {
-                    if (aval.?.value_ptr.* != bval.?.value_ptr.*) return false;
-                    if (!std.mem.eql(u8, aval.?.key_ptr.*, bval.?.key_ptr.*)) return false;
+            //     var ait = vals.iterator();
+            //     var bit = bmap.iterator();
+            //     var aval = ait.next();
+            //     var bval = bit.next();
+            //     while (aval != null and bval != null) {
+            //         if (aval.?.value_ptr.* != bval.?.value_ptr.*) return false;
+            //         if (!std.mem.eql(u8, aval.?.key_ptr.*, bval.?.key_ptr.*)) return false;
 
-                    aval = ait.next();
-                    bval = bit.next();
-                }
+            //         aval = ait.next();
+            //         bval = bit.next();
+            //     }
 
-                return true;
-            },
+            //     return true;
+            // },
             else => return std.meta.eql(a, b),
         }
     }
@@ -198,21 +216,19 @@ pub const Type = *const TypeKind;
 pub const TypeInterner = struct {
     unit: *Unit,
     allocator: std.heap.MemoryPool(TypeKind),
-    type_pool: std.ArrayListUnmanaged(TypeKind),
     type_map: TypeMap,
     multi_types: std.ArrayList(Type),
-    multi_types_keyed: std.ArrayList(std.StringArrayHashMap(Type)),
+    str_interner: StringInterner,
 
     const Self = @This();
 
     pub fn init(unit: *Unit) Self {
         return .{
             .allocator = .init(std.heap.page_allocator),
-            .type_pool = .{},
             .unit = unit,
             .type_map = undefined,
             .multi_types = std.ArrayList(Type).init(unit.allocator),
-            .multi_types_keyed = std.ArrayList(std.StringArrayHashMap(Type)).init(unit.allocator),
+            .str_interner = StringInterner.init(unit.allocator),
         };
     }
 
@@ -316,7 +332,7 @@ pub const TypeInterner = struct {
                 };
             },
             .func => |fun| {
-                const new_type, const old_base = self.rebasePointerRecursive(fun.ret_ty.?, new_base);
+                const new_type, const old_base = self.rebasePointerRecursive(fun.ret_ty, new_base);
                 return .{
                     self.createOrGetTy(.{
                         .func = .{
@@ -348,8 +364,8 @@ pub const TypeInterner = struct {
         }, unsized.qualifiers);
     }
 
-    pub fn unnamedStructTy(self: *Self, nidx: NodeIndex, fields: std.StringArrayHashMap(Type), qualifiers: TypeQualifier.Type) Type {
-        const field_tys = self.multiTyKeyed(fields);
+    pub fn unnamedStructTy(self: *Self, nidx: NodeIndex, fields: []const Type, qualifiers: TypeQualifier.Type) Type {
+        const field_tys = self.multiTy(fields);
         return self.createOrGetTy(.{
             .unnamed_struct = .{
                 .nidx = nidx,
@@ -358,18 +374,18 @@ pub const TypeInterner = struct {
         }, qualifiers);
     }
 
-    pub fn structTy(self: *Self, name: TokenIndex, fields: std.StringArrayHashMap(Type), qualifiers: TypeQualifier.Type) Type {
-        const field_tys = self.multiTyKeyed(fields);
+    pub fn structTy(self: *Self, nidx: NodeIndex, fields: []const Type, qualifiers: TypeQualifier.Type) Type {
+        const field_tys = self.multiTy(fields);
         return self.createOrGetTy(.{
             .@"struct" = .{
-                .name = name,
+                .nidx = nidx,
                 .fields = field_tys,
             },
         }, qualifiers);
     }
 
-    pub fn unnamedUnionTy(self: *Self, nidx: NodeIndex, variants: std.StringArrayHashMap(Type), qualifiers: TypeQualifier.Type) Type {
-        const variant_tys = self.multiTyKeyed(variants);
+    pub fn unnamedUnionTy(self: *Self, nidx: NodeIndex, variants: []const Type, qualifiers: TypeQualifier.Type) Type {
+        const variant_tys = self.multiTy(variants);
         return self.createOrGetTy(.{
             .unnamed_union = .{
                 .nidx = nidx,
@@ -378,11 +394,11 @@ pub const TypeInterner = struct {
         }, qualifiers);
     }
 
-    pub fn unionTy(self: *Self, name: TokenIndex, variants: std.StringArrayHashMap(Type), qualifiers: TypeQualifier.Type) Type {
-        const variant_tys = self.multiTyKeyed(variants);
+    pub fn unionTy(self: *Self, nidx: NodeIndex, variants: []const Type, qualifiers: TypeQualifier.Type) Type {
+        const variant_tys = self.multiTy(variants);
         return self.createOrGetTy(.{
             .@"union" = .{
-                .name = name,
+                .nidx = nidx,
                 .variants = variant_tys,
             },
         }, qualifiers);
@@ -416,33 +432,36 @@ pub const TypeInterner = struct {
     }
 
     pub fn multiTyKeyed(self: *Self, values: std.StringArrayHashMap(Type)) Type {
-        const ty = self.type_map.getOrPut(.{ .kind = .{ .multi_type_keyed = values }, .qualifiers = 0 }) catch unreachable;
-        if (ty.found_existing) {
-            return ty.value_ptr.*;
-        }
+        // const ty = self.type_map.getOrPut(.{ .kind = .{ .multi_type_keyed = values }, .qualifiers = 0 }) catch unreachable;
+        // if (ty.found_existing) {
+        //     return ty.value_ptr.*;
+        // }
 
         const index = self.multi_types_keyed.items.len;
         self.multi_types_keyed.append(values) catch unreachable;
+        _ = index;
 
         const val = self.allocator.create() catch unreachable;
-        val.kind = .{
-            .multi_type_keyed_impl = index,
-        };
+        // val.kind = .{
+        //     .void_ty
+        //     // .multi_type_keyed_impl = index,
+        // };
         val.qualifiers = 0;
 
-        ty.value_ptr.* = val;
-        return ty.value_ptr.*;
+        // ty.value_ptr.* = val;
+        // return ty.value_ptr.*;
+        return undefined;
     }
 
     /// Expects multi_type to be .multi_type_impl
     pub fn getMultiTypes(self: *Self, multi_type: Type) []const Type {
-        return self.multi_types.items[multi_type.multi_type_impl.start .. multi_type.multi_type_impl.start + multi_type.multi_type_impl.len];
+        return self.multi_types.items[multi_type.kind.multi_type_impl.start .. multi_type.kind.multi_type_impl.start + multi_type.kind.multi_type_impl.len];
     }
 
-    pub fn funcTyNoParams(self: *Self, ret_ty: ?Type) Type {
+    pub fn funcTyNoParams(self: *Self, ret_ty: Type) Type {
         return self.funcTy(&.{}, ret_ty);
     }
-    pub fn funcTy(self: *Self, param_tys: []const Type, ret_ty: ?Type) Type {
+    pub fn funcTy(self: *Self, param_tys: []const Type, ret_ty: Type) Type {
         const param_multi_ty = self.multiTy(param_tys);
 
         return self.createOrGetTy(.{
@@ -456,11 +475,11 @@ pub const TypeInterner = struct {
     pub fn printTyToStr(self: *const Self, ty: Type, allocator: std.mem.Allocator) []const u8 {
         var buf = std.ArrayList(u8).init(allocator);
         const buf_writer = buf.writer();
-        self.printTyWriter(ty, buf_writer) catch @panic("Printing type failed");
+        self.printTyWriter(ty, false, buf_writer) catch @panic("Printing type failed");
         return buf.items;
     }
 
-    pub fn printTyWriter(self: *const Self, ty: Type, writer: anytype) !void {
+    pub fn printTyWriter(self: *const Self, ty: Type, multi_struct: bool, writer: anytype) !void {
         switch (ty.kind) {
             .pointer, .array, .array_unsized => {},
             else => {
@@ -499,13 +518,13 @@ pub const TypeInterner = struct {
             .bool => try writer.print("bool", .{}),
 
             .pointer => |ptr| {
-                try self.printTyWriter(ptr.base, writer);
+                try self.printTyWriter(ptr.base, false, writer);
                 try writer.print(" *", .{});
                 try TypeQualifier.writePretty(ty.qualifiers, writer);
             },
 
             .array => |val| {
-                try self.printTyWriter(val.base, writer);
+                try self.printTyWriter(val.base, false, writer);
                 try writer.writeByte('[');
                 if (ty.qualifiers > 0) {
                     try TypeQualifier.writePretty(ty.qualifiers, writer);
@@ -514,7 +533,7 @@ pub const TypeInterner = struct {
                 try writer.print("{}]", .{val.size});
             },
             .array_unsized => |val| {
-                try self.printTyWriter(val.base, writer);
+                try self.printTyWriter(val.base, false, writer);
                 try writer.writeByte('[');
                 if (ty.qualifiers > 0) {
                     try TypeQualifier.writePretty(ty.qualifiers, writer);
@@ -523,36 +542,68 @@ pub const TypeInterner = struct {
             },
             .unnamed_struct => |rec| {
                 try writer.print("struct ({})", .{rec.nidx});
-                try self.printTyWriter(rec.fields, writer);
+                try self.printTyWriter(rec.fields, true, writer);
             },
             .@"struct" => |rec| {
                 try writer.print("struct ", .{});
-                try writer.writeAll(self.unit.identifierAt(rec.name));
+                const tok_index = self.unit.nodes.items[rec.nidx].data.two.a;
+                try writer.writeAll(self.unit.identifierAt(@bitCast(tok_index)));
                 try writer.writeByte(' ');
-                try self.printTyWriter(rec.fields, writer);
+                try self.printTyWriter(rec.fields, true, writer);
             },
             .unnamed_union => |uni| {
                 try writer.print("union ({}) ", .{uni.nidx});
-                try self.printTyWriter(uni.variants, writer);
+                try self.printTyWriter(uni.variants, true, writer);
             },
             .@"union" => |uni| {
                 try writer.print("union", .{});
-                try writer.writeAll(self.unit.identifierAt(uni.name));
+                const tok_index = self.unit.nodes.items[uni.nidx].data.two.a;
+                try writer.writeAll(self.unit.identifierAt(@bitCast(tok_index)));
                 try writer.writeByte(' ');
-                try self.printTyWriter(uni.variants, writer);
+                try self.printTyWriter(uni.variants, true, writer);
+            },
+
+            .field => |fld| {
+                try self.printTyWriter(fld.ty, false, writer);
+                try writer.print(" {s}", .{self.str_interner.get(fld.name)});
+            },
+
+            .bitfield_named => |bf| {
+                try self.printTyWriter(bf.base, false, writer);
+                try writer.print(" {s}", .{self.str_interner.get(bf.name)});
+                try writer.print(" : {}", .{bf.bits});
+            },
+
+            .bitfield => |bf| {
+                try self.printTyWriter(bf.base, false, writer);
+                try writer.print(" : {}", .{bf.bits});
             },
 
             .multi_type => |tys| {
-                try writer.print("(", .{});
-                if (tys.len > 0) {
-                    try self.printTyWriter(tys[0], writer);
+                if (multi_struct) {
+                    try writer.print("{{ ", .{});
+                    if (tys.len > 0) {
+                        try self.printTyWriter(tys[0], false, writer);
+                        try writer.print("; ", .{});
 
-                    for (tys[1..]) |mty| {
-                        try writer.print(", ", .{});
-                        try self.printTyWriter(mty, writer);
+                        for (tys[1..]) |mty| {
+                            try self.printTyWriter(mty, false, writer);
+                            try writer.print("; ", .{});
+                        }
                     }
+                    try writer.print("}}", .{});
+                } else {
+                    try writer.print("(", .{});
+                    if (tys.len > 0) {
+                        try self.printTyWriter(tys[0], false, writer);
+
+                        for (tys[1..]) |mty| {
+                            try writer.print(", ", .{});
+                            try self.printTyWriter(mty, false, writer);
+                        }
+                    }
+                    try writer.print(")", .{});
                 }
-                try writer.print(")", .{});
             },
             .multi_type_impl => |mty| {
                 try self.printTyWriter(&.{
@@ -560,38 +611,34 @@ pub const TypeInterner = struct {
                     .kind = .{
                         .multi_type = self.multi_types.items[mty.start .. mty.start + mty.len],
                     },
-                }, writer);
+                }, multi_struct, writer);
             },
-            .multi_type_keyed => |kyd| {
-                try writer.print("{{ ", .{});
-                var it = kyd.iterator();
+            // .multi_type_keyed => |kyd| {
+            //     try writer.print("{{ ", .{});
+            //     var it = kyd.iterator();
 
-                if (it.next()) |val| {
-                    try self.printTyWriter(val.value_ptr.*, writer);
-                    try writer.print(" {s}; ", .{val.key_ptr.*});
-                }
-                while (it.next()) |val| {
-                    try self.printTyWriter(val.value_ptr.*, writer);
-                    try writer.print(" {s}; ", .{val.key_ptr.*});
-                }
-                try writer.print("}}", .{});
-            },
-            .multi_type_keyed_impl => |ind| {
-                try self.printTyWriter(&.{
-                    .qualifiers = 0,
-                    .kind = .{
-                        .multi_type_keyed = self.multi_types_keyed.items[ind],
-                    },
-                }, writer);
-            },
+            //     if (it.next()) |val| {
+            //         try self.printTyWriter(val.value_ptr.*, writer);
+            //         try writer.print(" {s}; ", .{val.key_ptr.*});
+            //     }
+            //     while (it.next()) |val| {
+            //         try self.printTyWriter(val.value_ptr.*, writer);
+            //         try writer.print(" {s}; ", .{val.key_ptr.*});
+            //     }
+            //     try writer.print("}}", .{});
+            // },
+            // .multi_type_keyed_impl => |ind| {
+            //     try self.printTyWriter(&.{
+            //         .qualifiers = 0,
+            //         .kind = .{
+            //             .multi_type_keyed = self.multi_types_keyed.items[ind],
+            //         },
+            //     }, writer);
+            // },
             .func => |func| {
-                if (func.ret_ty) |ret| {
-                    try self.printTyWriter(ret, writer);
-                } else {
-                    try writer.print("void", .{});
-                }
+                try self.printTyWriter(func.ret_ty, false, writer);
                 try writer.print(" ", .{});
-                try self.printTyWriter(func.params, writer);
+                try self.printTyWriter(func.params, false, writer);
             },
         }
     }
@@ -626,5 +673,48 @@ pub const TypeInterner = struct {
 
         ty.value_ptr.* = val;
         return ty.value_ptr.*;
+    }
+};
+
+pub const StringInterner = struct {
+    pub const Index = u32;
+    const StringBufferIndex = struct { start: u32, count: u32 };
+
+    allocator: std.mem.Allocator,
+    buffer: std.ArrayList(u8),
+    map: std.StringHashMap(Index),
+    list: std.ArrayList(StringBufferIndex),
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{
+            .allocator = allocator,
+            .buffer = std.ArrayList(u8).init(allocator),
+            .map = std.StringHashMap(Index).init(allocator),
+            .list = std.ArrayList(StringBufferIndex).init(allocator),
+        };
+    }
+
+    pub fn getOrPut(self: *Self, string: []const u8) !Index {
+        const entry = try self.map.getOrPut(string);
+        if (entry.found_existing) {
+            return entry.value_ptr.*;
+        }
+
+        const index = self.list.items.len;
+        try self.buffer.appendSlice(string);
+        try self.list.append(.{
+            .start = @truncate(index),
+            .count = @truncate(string.len),
+        });
+        entry.value_ptr.* = @truncate(index);
+
+        return @truncate(index);
+    }
+
+    pub fn get(self: *const Self, index: Index) []const u8 {
+        const buffer_index = self.list.items[index];
+        return self.buffer.items[buffer_index.start .. buffer_index.start + buffer_index.count];
     }
 };

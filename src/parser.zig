@@ -1086,12 +1086,12 @@ pub const Node = extern struct {
         if (with_types) {
             if (unit.node_to_type.get(index)) |ty| {
                 try writer.print(" : \x1b[1m", .{});
-                try unit.interner.printTyWriter(ty, writer);
+                try unit.interner.printTyWriter(ty, false, writer);
                 try writer.print("\x1b[0m", .{});
             }
             if (unit.declared_type.get(index)) |ty| {
                 try writer.print(" : \x1b[31;1m", .{});
-                try unit.interner.printTyWriter(ty, writer);
+                try unit.interner.printTyWriter(ty, false, writer);
                 try writer.print("\x1b[0m", .{});
             }
         }

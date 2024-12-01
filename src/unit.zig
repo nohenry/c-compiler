@@ -23,49 +23,6 @@ pub const DefineFunction = struct {
     var_arg: bool,
 };
 
-pub const StringInterner = struct {
-    pub const Index = u32;
-    const StringBufferIndex = struct { start: u32, count: u32 };
-
-    allocator: std.mem.Allocator,
-    buffer: std.ArrayList(u8),
-    map: std.StringHashMap(Index),
-    list: std.ArrayList(StringBufferIndex),
-
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return .{
-            .allocator = allocator,
-            .buffer = std.ArrayList(u8).init(allocator),
-            .map = std.StringHashMap(Index).init(allocator),
-            .list = std.ArrayList(StringBufferIndex).init(allocator),
-        };
-    }
-
-    pub fn getOrPut(self: *Self, string: []const u8) !Index {
-        const entry = try self.map.getOrPut(string);
-        if (entry.found_existing) {
-            return entry.value_ptr.*;
-        }
-
-        const index = self.list.items.len;
-        try self.buffer.appendSlice(string);
-        try self.list.append(.{
-            .start = @truncate(index),
-            .count = @truncate(string.len),
-        });
-        entry.value_ptr.* = @truncate(index);
-
-        return @truncate(index);
-    }
-
-    pub fn get(self: *Self, index: Index) []const u8 {
-        const buffer_index = self.list.items[index];
-        return self.buffer[buffer_index.start .. buffer_index.start + buffer_index.count];
-    }
-};
-
 pub const File = struct {
     file_path: []const u8,
     source: []u8,
@@ -84,8 +41,8 @@ pub const Unit = struct {
     interner: *ty.TypeInterner,
     declared_type: std.AutoHashMap(NodeIndex, ty.Type),
     node_to_type: std.AutoHashMap(NodeIndex, ty.Type),
-    // name_to_node: std.StringHashMap(NodeIndex),
     node_to_node: std.AutoHashMap(NodeIndex, NodeIndex),
+    field_map: std.AutoHashMap(NodeIndex, std.StringHashMap(u32)),
     symbol_table: SymbolTable,
 
     defines: std.StringHashMap(DefineValue),
@@ -119,6 +76,7 @@ pub const Unit = struct {
             .node_to_node = std.AutoHashMap(NodeIndex, NodeIndex).init(allocator),
             .declared_type = std.AutoHashMap(NodeIndex, ty.Type).init(allocator),
             .node_to_type = std.AutoHashMap(NodeIndex, ty.Type).init(allocator),
+            .field_map = .init(allocator),
             .symbol_table = SymbolTable.init(allocator),
             .defines = std.StringHashMap(DefineValue).init(allocator),
             .define_fns = std.StringHashMap(DefineFunction).init(allocator),
@@ -696,4 +654,11 @@ pub const SymbolScope = struct {
 
 pub const Symbol = struct {
     nidx: NodeIndex,
+    fields: std.StringHashMap(u32) = undefined,
 };
+
+// comptime {
+//     @compileLog(@sizeOf(std.StringArrayHashMap(u32)));
+//     @compileLog(@sizeOf(std.StringHashMap(u32)));
+//     @compileLog(@sizeOf(std.ingHashMap(u32)));
+// }
