@@ -536,7 +536,7 @@ pub fn main() !void {
 
         for (unit.files.items) |file| {
             if (file.tokens.items.len != 1) {
-                std.log.info("File {s} {}", .{file.file_path, file.tokens.items.len});
+                std.log.info("File {s} {}", .{ file.file_path, file.tokens.items.len });
             }
         }
         return;
@@ -545,8 +545,6 @@ pub fn main() !void {
     var parser = Parser.init(&unit, &tokenizer);
     const unit_range = try parser.parseUnit();
     std.log.info("Range: {}-{}", .{ unit_range.start, unit_range.count });
-
-
 
     const stdout = std.io.getStdOut();
     var writer = stdout.writer();
@@ -559,7 +557,7 @@ pub fn main() !void {
     var typechecker = TypeChecker.init(&unit);
     for (0..unit_range.count) |i| {
         const node_index = unit.node_ranges.items[i + unit_range.start];
-        _ = try typechecker.checkNode(node_index);
+        _ = try typechecker.checkNode(node_index, null);
         try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, true, writer);
     }
 

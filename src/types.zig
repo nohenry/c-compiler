@@ -21,6 +21,7 @@ pub const TypeKind = struct {
         pointer: struct { base: Type },
 
         array: struct { base: Type, size: usize },
+        array_unsized: struct { base: Type },
 
         unnamed_struct: struct {
             nidx: NodeIndex,
@@ -84,6 +85,21 @@ pub const TypeKind = struct {
             },
             // .@"struct", .unnamed_struct, .@"union", .unnamed_union => true,
             else => unreachable,
+        };
+    }
+
+    pub fn isArithmetic(self: *const @This()) bool {
+        return switch (self.kind) {
+            .char,
+            .short,
+            .int,
+            .long,
+            .longlong,
+            .float,
+            .double,
+            .longdouble,
+            => true,
+            else => false,
         };
     }
 
@@ -242,7 +258,12 @@ pub const TypeInterner = struct {
     }
 
     pub fn rebasePointer(self: *Self, ptr_type: Type, new_base: Type) Type {
-        return self.pointerTy(new_base, ptr_type.qualifiers);
+        switch (ptr_type.kind) {
+            .pointer => return self.pointerTy(new_base, ptr_type.qualifiers),
+            .array => return self.arrayTy(new_base, ptr_type.kind.array.size, ptr_type.qualifiers),
+            .array_unsized => return self.arrayUnsizedTy(new_base, ptr_type.qualifiers),
+            else => unreachable,
+        }
     }
 
     pub fn rebasePointerRecursive(self: *Self, ptr_type: Type, new_base: Type) struct {
@@ -257,6 +278,29 @@ pub const TypeInterner = struct {
 
                 return .{
                     self.pointerTy(
+                        new_type,
+                        ptr_type.qualifiers,
+                    ),
+                    old_base,
+                };
+            },
+            .array => |arr| {
+                const new_type, const old_base = self.rebasePointerRecursive(arr.base, new_base);
+
+                return .{
+                    self.arrayTy(
+                        new_type,
+                        arr.size,
+                        ptr_type.qualifiers,
+                    ),
+                    old_base,
+                };
+            },
+            .array_unsized => |arr| {
+                const new_type, const old_base = self.rebasePointerRecursive(arr.base, new_base);
+
+                return .{
+                    self.arrayUnsizedTy(
                         new_type,
                         ptr_type.qualifiers,
                     ),
@@ -279,8 +323,21 @@ pub const TypeInterner = struct {
         }
     }
 
-    pub fn arrayTy(self: *Self, base: Type, size: usize) Type {
-        return self.createOrGetTy(.{ .array = .{ .base = base, .size = size } }, 0);
+    pub fn arrayTy(self: *Self, base: Type, size: usize, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{ .array = .{ .base = base, .size = size } }, qualifiers);
+    }
+
+    pub fn arrayUnsizedTy(self: *Self, base: Type, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{ .array_unsized = .{ .base = base } }, qualifiers);
+    }
+
+    pub fn arrayUnsizedToSized(self: *Self, unsized: Type, size: usize) Type {
+        return self.createOrGetTy(.{
+            .array = .{
+                .base = unsized.kind.array_unsized.base,
+                .size = size,
+            },
+        }, unsized.qualifiers);
     }
 
     pub fn unnamedStructTy(self: *Self, nidx: NodeIndex, fields: std.StringArrayHashMap(Type), qualifiers: TypeQualifier.Type) Type {
@@ -396,11 +453,11 @@ pub const TypeInterner = struct {
 
     pub fn printTyWriter(self: *const Self, ty: Type, writer: anytype) !void {
         switch (ty.kind) {
-            .pointer => {},
+            .pointer, .array, .array_unsized => {},
             else => {
                 if (ty.qualifiers > 0) {
                     try TypeQualifier.writePretty(ty.qualifiers, writer);
-                    try writer.print(" ", .{});
+                    try writer.writeByte(' ');
                 }
             },
         }
@@ -440,7 +497,20 @@ pub const TypeInterner = struct {
 
             .array => |val| {
                 try self.printTyWriter(val.base, writer);
-                try writer.print("[{}]", .{val.size});
+                try writer.writeByte('[');
+                if (ty.qualifiers > 0) {
+                    try TypeQualifier.writePretty(ty.qualifiers, writer);
+                    try writer.writeByte(' ');
+                }
+                try writer.print("{}]", .{val.size});
+            },
+            .array_unsized => |val| {
+                try self.printTyWriter(val.base, writer);
+                try writer.writeByte('[');
+                if (ty.qualifiers > 0) {
+                    try TypeQualifier.writePretty(ty.qualifiers, writer);
+                }
+                try writer.print("]", .{});
             },
             .unnamed_struct => |rec| {
                 try writer.print("struct ({})", .{rec.nidx});

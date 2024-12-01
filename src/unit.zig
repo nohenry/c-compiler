@@ -648,6 +648,10 @@ pub const SymbolTable = struct {
         var i = self.symbol_stack.items.len;
         while (i > 0) {
             i -= 1;
+            // var it = self.symbol_stack.items[i].symbols.iterator();
+            // while (it.next()) |sym| {
+            //     std.log.info("Sym {s}: {}", .{ sym.key_ptr.*, sym.value_ptr.* });
+            // }
 
             if (self.symbol_stack.items[i].symbols.get(name)) |sym| {
                 return sym;

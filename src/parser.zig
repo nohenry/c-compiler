@@ -26,9 +26,9 @@ pub const NodeKind = enum(u32) {
 
     /// node_data: a(u32) = index of lhs, b(u16) = relative index of rhs, c(u16) = operator
     binary_lr_operator,
-    /// node_data: a(u32) = index of expr, b(u16) = operator
+    /// node_data: a(u32) = index of expr, c(u16) = operator
     unary_prefix_operator,
-    /// node_data: a(u32) = index of expr, b(u16) = operator
+    /// node_data: a(u32) = index of expr, c(u16) = operator
     unary_suffix_operator,
     /// node_data: a(u32) = relative index of invokee
     invoke,
@@ -102,7 +102,7 @@ pub const NodeKind = enum(u32) {
     /// node_data: a(u32) = base type index, b(u16) = relative index of size, h(u8) = type_qualifiers
     array_type_fixed,
     /// [static 10]
-    /// node_data: a(u32) = base type index, b(u16) = relative index of size, h(u8) = type_qualifiers    array_type_static,
+    /// node_data: a(u32) = base type index, b(u16) = relative index of size, h(u8) = type_qualifiers
     array_type_static,
 
     /// node_data: a(u16) = relative index of return type
@@ -346,15 +346,27 @@ pub const TypeQualifier = struct {
     pub fn writePretty(type_qualifier: Type, writer: anytype) !void {
         if ((type_qualifier & @"const") > 0) {
             _ = try writer.write("const");
+            if ((type_qualifier & ~@"const") > 0) {
+                try writer.writeByte(' ');
+            }
         }
         if ((type_qualifier & restrict) > 0) {
             _ = try writer.write("restrict");
+            if ((type_qualifier & ~restrict) > 0) {
+                try writer.writeByte(' ');
+            }
         }
         if ((type_qualifier & @"volatile") > 0) {
             _ = try writer.write("volatile");
+            if ((type_qualifier & ~@"volatile") > 0) {
+                try writer.writeByte(' ');
+            }
         }
         if ((type_qualifier & atomic) > 0) {
             _ = try writer.write("atomic");
+            if ((type_qualifier & ~atomic) > 0) {
+                try writer.writeByte(' ');
+            }
         }
     }
 };

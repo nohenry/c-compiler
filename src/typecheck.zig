@@ -18,7 +18,7 @@ pub const TypeChecker = struct {
         };
     }
 
-    pub fn checkNode(self: *Self, nidx: NodeIndex) !Type {
+    pub fn checkNode(self: *Self, nidx: NodeIndex, expected_type: ?Type) !Type {
         const node = &self.unit.nodes.items[nidx];
         const result: Type = switch (node.kind) {
             .empty => return self.unit.interner.voidTy(),
@@ -31,9 +31,84 @@ pub const TypeChecker = struct {
             .unsigned_long_literal => return self.unit.interner.longTy(false, 0),
             .long_long_literal => return self.unit.interner.longlongTy(true, 0),
             .unsigned_long_long_literal => return self.unit.interner.longlongTy(false, 0),
+            .string_literal => return self.unit.interner.arrayTy(
+                self.unit.interner.charTy(false, 0),
+                self.unit.stringAt(@bitCast(node.data.two.a)).len,
+                0,
+            ),
+            .initializer_list => expected_type orelse std.debug.panic("Unable to infer initializer type", .{}),
+            .initializer_list_one => blk: {
+                const designation = &self.unit.nodes.items[node.data.two.a];
+                switch (designation.kind) {
+                    .designation => @panic("TODO"),
+                    else => {
+                        const element = switch (expected_type.?.kind) {
+                            .array => |arr| arr.base,
+                            .array_unsized => |arr| arr.base,
+                            else => blk1: {
+                                if (expected_type.?.isScalar()) {
+                                    std.log.warn("Excess braces around initializer", .{});
+                                    break :blk1 expected_type.?;
+                                }
+
+                                std.debug.panic("Unable to get elemetn type", .{});
+                            },
+                        };
+                        _ = try self.checkNode(node.data.two.a, element);
+                    },
+                }
+
+                break :blk expected_type.?;
+            },
+            .initializer_list_many => blk: {
+                switch (expected_type.?.kind) {
+                    .array => |arr| {
+                        var index = node.data.two.a;
+                        const end_index = index + node.data.two.b;
+                        while (index < end_index) : (index += 1) {
+                            const desig_index = self.unit.node_ranges.items[index];
+                            const designation = &self.unit.nodes.items[desig_index];
+                            switch (designation.kind) {
+                                .designation => @panic("TODO"),
+                                else => {
+                                    _ = try self.checkNode(desig_index, arr.base);
+                                },
+                            }
+                        }
+                        if (node.data.two.b > arr.size) {
+                            std.log.warn("Too many values in initizlier (will be ignored)", .{});
+                        }
+                        break :blk expected_type.?;
+                    },
+                    .array_unsized => |arr| {
+                        var index = node.data.two.a;
+                        const end_index = index + node.data.two.b;
+                        while (index < end_index) : (index += 1) {
+                            const desig_index = self.unit.node_ranges.items[index];
+                            const designation = &self.unit.nodes.items[desig_index];
+                            switch (designation.kind) {
+                                .designation => @panic("TODO"),
+                                else => {
+                                    _ = try self.checkNode(desig_index, arr.base);
+                                },
+                            }
+                        }
+                        const sized_type = self.unit.interner.arrayUnsizedToSized(expected_type.?, node.data.two.b);
+                        break :blk sized_type;
+                    },
+                    else => {
+                        if (expected_type.?.isScalar()) {
+                            std.log.warn("Excess braces around initializer", .{});
+                            break :blk expected_type.?;
+                        }
+
+                        std.debug.panic("Unable to get elemetn type", .{});
+                    },
+                }
+            },
             .binary_lr_operator => blk: {
                 const op: TokenKind = @enumFromInt(node.data.four.d);
-                const left = try self.checkNode(node.data.two.a);
+                const left = try self.checkNode(node.data.two.a, null);
                 if (op == .dot) {
                     if (!left.isStructured()) {
                         std.debug.panic("Left side is not a structure type!!!!", .{});
@@ -54,7 +129,7 @@ pub const TypeChecker = struct {
 
                     break :blk;
                 }
-                const right = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.c));
+                const right = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.c), null);
 
                 switch (op) {
                     .plus,
@@ -154,9 +229,222 @@ pub const TypeChecker = struct {
                     else => std.debug.panic("Unexpected op {}", .{op}),
                 }
             },
-            .return_statement_value => blk: {
-                _ = try self.checkNode(node.data.as(.two).a);
-                break :blk self.unit.interner.voidTy();
+            .unary_prefix_operator => blk: {
+                const expr_type = try self.checkNode(node.data.two.a, null);
+                const op: TokenKind = @enumFromInt(node.data.four.d);
+                switch (op) {
+                    .plusplus,
+                    .minusminus,
+                    .plus,
+                    .minus,
+                    .exclamation,
+                    .tilde,
+                    .star,
+                    => {
+                        if (expr_type.isScalar()) break :blk expr_type;
+
+                        std.debug.panic("Can't apply operator to type \x1b[1m{s}\x1b[0m", .{
+                            self.unit.interner.printTyToStr(expr_type, self.unit.allocator),
+                        });
+                    },
+                    .ampersand => {
+                        break :blk self.unit.interner.pointerTy(expr_type, 0);
+                    },
+                    .sizeof => {
+                        break :blk self.unit.interner.longlongTy(true, 0);
+                    },
+                    else => unreachable,
+                }
+            },
+            .unary_suffix_operator => blk: {
+                const expr_type = try self.checkNode(node.data.two.a, null);
+                const op: TokenKind = @enumFromInt(node.data.four.d);
+                switch (op) {
+                    .plusplus,
+                    .minusminus,
+                    => {
+                        if (expr_type.isScalar()) break :blk expr_type;
+
+                        std.debug.panic("Can't apply operator to type \x1b[1m{s}\x1b[0m", .{
+                            self.unit.interner.printTyToStr(expr_type, self.unit.allocator),
+                        });
+                    },
+                    else => unreachable,
+                }
+            },
+            .cast => blk: {
+                const to_type = try self.checkNodeType(node.data.two.a);
+                const expr_type = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.c), to_type);
+
+                if (self.implicitlyCast(expr_type, to_type)) |ty| {
+                    break :blk ty;
+                }
+
+                if (expr_type.kind == .pointer and to_type.kind == .pointer) {
+                    return to_type;
+                } else if (expr_type.isIntegral() and to_type.kind == .pointer) {
+                    return to_type;
+                } else if (expr_type.kind == .pointer and to_type.isIntegral()) {
+                    return to_type;
+                }
+
+                std.debug.panic("Can't cast to type \x1b[1m{s}\x1b[0m", .{
+                    self.unit.interner.printTyToStr(expr_type, self.unit.allocator),
+                });
+            },
+            .if_statement => {
+                const condition_type = try self.checkNode(node.data.two.a, null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in while condition!", .{});
+                }
+
+                _ = try self.checkNode(node.data.two.b, null);
+
+                return self.unit.interner.voidTy();
+            },
+            .if_statement_no_body => {
+                const condition_type = try self.checkNode(node.data.two.a, null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in while condition!", .{});
+                }
+
+                return self.unit.interner.voidTy();
+            },
+            .if_statement_else => {
+                const condition_type = try self.checkNode(node.data.two.a, null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in while condition!", .{});
+                }
+
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.c), null);
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.d), null);
+
+                return self.unit.interner.voidTy();
+            },
+            .if_statement_no_body_else => {
+                const condition_type = try self.checkNode(node.data.two.a, null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in while condition!", .{});
+                }
+                _ = try self.checkNode(node.data.two.b, null);
+
+                return self.unit.interner.voidTy();
+            },
+            .while_loop => {
+                const condition_type = try self.checkNode(node.data.two.a, null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in while condition!", .{});
+                }
+
+                _ = try self.checkNode(node.data.two.b, null);
+
+                return self.unit.interner.voidTy();
+            },
+            .while_loop_empty => {
+                const condition_type = try self.checkNode(node.data.two.a, null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in while condition!", .{});
+                }
+
+                return self.unit.interner.voidTy();
+            },
+            .do_while_loop => {
+                const condition_type = try self.checkNode(node.data.two.a, null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in do while condition!", .{});
+                }
+
+                _ = try self.checkNode(node.data.two.b, null);
+
+                return self.unit.interner.voidTy();
+            },
+            .do_while_loop_empty => {
+                const condition_type = try self.checkNode(node.data.two.a, null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in do while condition!", .{});
+                }
+
+                return self.unit.interner.voidTy();
+            },
+            .for_loop => {
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.a), null);
+
+                const condition_type = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.b), null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in for condition!", .{});
+                }
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.c), null);
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.d), null);
+
+                return self.unit.interner.voidTy();
+            },
+            .for_loop_inc => {
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.a), null);
+
+                const condition_type = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.b), null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in for condition!", .{});
+                }
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.d), null);
+
+                return self.unit.interner.voidTy();
+            },
+            .for_loop_empty => {
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.a), null);
+
+                const condition_type = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.b), null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in for condition!", .{});
+                }
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.c), null);
+
+                return self.unit.interner.voidTy();
+            },
+            .for_loop_empty_inc => {
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.a), null);
+
+                const condition_type = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.b), null);
+                if (!condition_type.isScalar()) {
+                    std.debug.panic("Expected integral type in for condition!", .{});
+                }
+                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.d), null);
+
+                return self.unit.interner.voidTy();
+            },
+            .switch_case => {
+                const condition_type = try self.checkNode(node.data.two.a, null);
+                if (!condition_type.isIntegral()) {
+                    std.debug.panic("Expected integral type or enumeration in switch!", .{});
+                }
+                _ = try self.checkNode(node.data.two.b, null);
+
+                return self.unit.interner.voidTy();
+            },
+            .case => {
+                const condition_type = try self.checkNode(node.data.two.a, null);
+                if (!condition_type.isIntegral()) {
+                    std.debug.panic("Expected integral type or enumeration in switch!", .{});
+                }
+                _ = try self.checkNode(node.data.two.b, null);
+
+                return self.unit.interner.voidTy();
+            },
+            .default => {
+                _ = try self.checkNode(node.data.two.a, null);
+                return self.unit.interner.voidTy();
+            },
+            .label => {
+                _ = try self.checkNode(node.data.two.b, null);
+                return self.unit.interner.voidTy();
+            },
+            .continue_statement,
+            .break_statement,
+            .return_statement,
+            .empty_statement,
+            => return self.unit.interner.voidTy(),
+            .return_statement_value => {
+                _ = try self.checkNode(node.data.as(.two).a, null);
+                return self.unit.interner.voidTy();
             },
             .identifier => blk: {
                 const ident_index = node.data.two.a;
@@ -168,12 +456,12 @@ pub const TypeChecker = struct {
                 self.unit.node_to_node.put(nidx, sym.nidx) catch @panic("OOM");
 
                 const declared_ty = self.unit.declared_type.get(sym.nidx) orelse {
-                    std.debug.panic("Symbol \x1b[1m{s}\x1b0m does not have type declared with it (this is probably compiler bug)", .{ident_str});
+                    std.debug.panic("Symbol \x1b[1m{s}\x1b[0m does not have type declared with it (this is probably compiler bug)", .{ident_str});
                 };
 
                 break :blk declared_ty;
             },
-            .declaration => blk: {
+            .declaration => {
                 var next_index = node.data.as(.two).a;
                 const count = node.data.as(.four).c;
                 const storage = node.data.as(.eight).g;
@@ -182,12 +470,12 @@ pub const TypeChecker = struct {
                 const end_index = next_index + count;
                 while (next_index != end_index) : (next_index += 1) {
                     const node_index = self.unit.node_ranges.items[next_index];
-                    _ = try self.checkNode(node_index);
+                    _ = try self.checkNode(node_index, null);
                 }
 
-                break :blk self.unit.interner.voidTy();
+                return self.unit.interner.voidTy();
             },
-            .var_declaration_init => blk: {
+            .var_declaration_init => {
                 const ident_index = node.data.as(.two).a;
                 const type_index = Node.absoluteIndex(nidx, node.data.as(.four).c);
                 const init_index = Node.absoluteIndex(nidx, node.data.as(.four).d);
@@ -195,18 +483,19 @@ pub const TypeChecker = struct {
 
                 self.unit.symbol_table.putSymbol(ident_str, .{ .nidx = nidx });
                 const var_type = try self.checkNodeType(type_index);
-                self.unit.declared_type.put(nidx, var_type) catch @panic("OOM");
-                const init_type = try self.checkNode(init_index);
-                if (canImplicitlyCast(init_type, var_type)) {
-                    break :blk self.unit.interner.voidTy();
+                const init_type = try self.checkNode(init_index, var_type);
+                if (self.implicitlyCast(init_type, var_type)) |new_type| {
+                    self.unit.declared_type.put(nidx, new_type) catch @panic("OOM");
+
+                    return self.unit.interner.voidTy();
                 }
 
-                std.debug.panic("Can't assign type {s} to variable type {s}", .{
+                std.debug.panic("Can't assign type \x1b[32m{s}\x1b[0m to variable type \x1b[32m{s}\x1b[0m", .{
                     self.unit.interner.printTyToStr(init_type, self.unit.allocator),
                     self.unit.interner.printTyToStr(var_type, self.unit.allocator),
                 });
             },
-            .var_declaration => blk: {
+            .var_declaration => {
                 const ident_index = node.data.as(.two).a;
                 const type_index = Node.absoluteIndex(nidx, node.data.as(.four).c);
                 const ident_str = self.unit.identifierAt(@bitCast(ident_index));
@@ -215,23 +504,23 @@ pub const TypeChecker = struct {
                 const var_type = try self.checkNodeType(type_index);
                 self.unit.declared_type.put(nidx, var_type) catch @panic("OOM");
 
-                break :blk self.unit.interner.voidTy();
+                return self.unit.interner.voidTy();
             },
             .compound_empty => self.unit.interner.voidTy(),
-            .compound_one => blk: {
+            .compound_one => {
                 const item_index = node.data.as(.two).a;
-                _ = try self.checkNode(item_index);
-                break :blk self.unit.interner.voidTy();
+                _ = try self.checkNode(item_index, null);
+                return self.unit.interner.voidTy();
             },
-            .compound => blk: {
+            .compound => {
                 var range_start = node.data.as(.two).a;
                 const range_end = range_start + node.data.as(.two).b;
                 while (range_start < range_end) : (range_start += 1) {
-                    _ = try self.checkNode(self.unit.node_ranges.items[range_start]);
+                    _ = try self.checkNode(self.unit.node_ranges.items[range_start], null);
                 }
-                break :blk self.unit.interner.voidTy();
+                return self.unit.interner.voidTy();
             },
-            .function_declaration => blk: {
+            .function_declaration => {
                 const ident_index = node.data.as(.two).a;
                 const ident_str = self.unit.identifierAt(@bitCast(ident_index));
                 self.unit.symbol_table.putSymbol(ident_str, .{ .nidx = nidx });
@@ -239,9 +528,9 @@ pub const TypeChecker = struct {
                 const fn_type = try self.checkNodeType(type_index);
                 self.unit.declared_type.put(nidx, fn_type) catch @panic("OOM");
 
-                break :blk self.unit.interner.voidTy();
+                return self.unit.interner.voidTy();
             },
-            .function_declaration_body => blk: {
+            .function_declaration_body => {
                 const ident_index = node.data.as(.two).a;
                 const ident_str = self.unit.identifierAt(@bitCast(ident_index));
 
@@ -251,12 +540,12 @@ pub const TypeChecker = struct {
                 const fn_type = try self.checkNodeType(type_index);
 
                 const body_index = Node.absoluteIndex(nidx, node.data.as(.four).d);
-                _ = try self.checkNode(body_index);
+                _ = try self.checkNode(body_index, null);
                 self.unit.symbol_table.popScope();
 
                 self.unit.declared_type.put(nidx, fn_type) catch @panic("OOM");
 
-                break :blk self.unit.interner.voidTy();
+                return self.unit.interner.voidTy();
             },
             else => {
                 std.log.warn("Skipping node {}", .{nidx});
@@ -273,7 +562,7 @@ pub const TypeChecker = struct {
         return try self.checkNodeTypeImpl(nidx, null);
     }
 
-    pub fn checkNodeTypeImpl(self: *Self, nidx: NodeIndex, last_type: ?*Type) !Type {
+    pub fn checkNodeTypeImpl(self: *Self, nidx: NodeIndex, last_type: ?*Type) std.mem.Allocator.Error!Type {
         const node = &self.unit.nodes.items[nidx];
         const result: Type = switch (node.kind) {
             .char_type => self.unit.interner.charTy(false, node.data.eight.h),
@@ -307,7 +596,48 @@ pub const TypeChecker = struct {
                     ty = self.unit.interner.rebasePointer(ty, last.*);
                 }
                 const base = try self.checkNodeTypeImpl(node.data.two.a, &ty);
-                if (base.kind == .pointer or base.kind == .func) {
+                if (base.kind == .pointer or base.kind == .func or base.kind == .array or base.kind == .array_unsized) {
+                    break :blk base;
+                } else {
+                    ty, _ = self.unit.interner.rebasePointerRecursive(ty, base);
+                    break :blk ty;
+                }
+            },
+
+            .array_type => blk: {
+                const base_type_index = node.data.two.a;
+
+                var ty = self.unit.interner.arrayUnsizedTy(self.unit.interner.voidTy(), node.data.eight.h);
+                if (last_type) |last| {
+                    ty = self.unit.interner.rebasePointer(ty, last.*);
+                }
+
+                const base = try self.checkNodeTypeImpl(base_type_index, &ty);
+
+                if (base.kind == .pointer or base.kind == .func or base.kind == .array or base.kind == .array_unsized) {
+                    break :blk base;
+                } else {
+                    ty, _ = self.unit.interner.rebasePointerRecursive(ty, base);
+                    break :blk ty;
+                }
+            },
+            .array_type_fixed => blk: {
+                const base_type_index = node.data.two.a;
+                const size_index = Node.absoluteIndex(nidx, node.data.four.c);
+                var evaluator = SimpleEvaluator.init(self.unit);
+                const size_value = try evaluator.evalNode(size_index);
+                if (size_value != .int_value) {
+                    std.debug.panic("Expected an integer value for array size!", .{});
+                }
+
+                var ty = self.unit.interner.arrayTy(self.unit.interner.voidTy(), size_value.int_value, node.data.eight.h);
+                if (last_type) |last| {
+                    ty = self.unit.interner.rebasePointer(ty, last.*);
+                }
+
+                const base = try self.checkNodeTypeImpl(base_type_index, &ty);
+
+                if (base.kind == .pointer or base.kind == .func or base.kind == .array or base.kind == .array_unsized) {
                     break :blk base;
                 } else {
                     ty, _ = self.unit.interner.rebasePointerRecursive(ty, base);
@@ -409,7 +739,9 @@ pub const TypeChecker = struct {
                 const ident_index = node.data.two.b;
                 const ident_str = self.unit.identifierAt(@bitCast(ident_index));
                 self.unit.symbol_table.putSymbol(ident_str, .{ .nidx = nidx });
-                break :blk try self.checkNodeTypeImpl(ty_index, null);
+                const param_ty = try self.checkNodeTypeImpl(ty_index, null);
+                try self.unit.declared_type.put(nidx, param_ty);
+                break :blk param_ty;
             },
 
             else => {
@@ -423,17 +755,54 @@ pub const TypeChecker = struct {
         return result;
     }
 
-    pub fn canImplicitlyCast(from: Type, to: Type) bool {
-        if (from.isScalar() and to.isScalar()) return true else if (from.kind == .@"struct" and to.kind == .@"struct") {
-            return @as(u32, @bitCast(from.kind.@"struct".name)) == @as(u32, @bitCast(to.kind.@"struct".name));
+    pub fn implicitlyCast(self: *Self, from: Type, to: Type) ?Type {
+        if (from == to)
+            return from
+        else if (from.kind == .pointer and to.kind == .pointer) {
+            if (from.kind.pointer.base == to.kind.pointer.base) {
+                // f 0b0000 0b0000 0b0001 0b0001
+                // c 0b0000 0b0001 0b0000 0b0001
+                //   ---------------------------
+                // f 0b0000 0b0000 0b0001 0b0001
+                // c 0b1111 0b1110 0b1111 0b1110
+                //   ---------------------------
+                //   0b0000 0b0000 0b0001 0b0000
+                if (from.qualifiers & ~to.qualifiers == 0) {
+                    return to;
+                }
+            }
+            std.log.warn("Tried to implicitly cast from \x1b[32m{s}\x1b[0m to \x1b[32m{s}\x1b[0m", .{
+                self.unit.interner.printTyToStr(from, self.unit.allocator),
+                self.unit.interner.printTyToStr(to, self.unit.allocator),
+            });
+            return to;
+        } else if (from.kind == .array and to.kind == .pointer) {
+            if (from.kind.array.base == to.kind.pointer.base) {
+                if (from.qualifiers & ~to.qualifiers == 0) {
+                    return to;
+                }
+            }
+        } else if (from.kind == .array_unsized and to.kind == .pointer) {
+            if (from.kind.array.base == to.kind.pointer.base) {
+                if (from.qualifiers & ~to.qualifiers == 0) {
+                    return to;
+                }
+            }
+        } else if (from.isArithmetic() and to.isArithmetic())
+            return to
+        else if (from.kind == .@"struct" and to.kind == .@"struct") {
+            return if (@as(u32, @bitCast(from.kind.@"struct".name)) == @as(u32, @bitCast(to.kind.@"struct".name))) from else null;
         } else if (from.kind == .@"union" and to.kind == .@"union") {
-            return @as(u32, @bitCast(from.kind.@"union".name)) == @as(u32, @bitCast(to.kind.@"union".name));
+            return if (@as(u32, @bitCast(from.kind.@"union".name)) == @as(u32, @bitCast(to.kind.@"union".name))) from else null;
         } else if (from.kind == .unnamed_struct and to.kind == .unnamed_struct) {
-            return from.kind.unnamed_struct.nidx == to.kind.unnamed_struct.nidx;
+            return if (from.kind.unnamed_struct.nidx == to.kind.unnamed_struct.nidx) from else null;
         } else if (from.kind == .unnamed_union and to.kind == .unnamed_union) {
-            return from.kind.unnamed_union.nidx == to.kind.unnamed_union.nidx;
+            return if (from.kind.unnamed_union.nidx == to.kind.unnamed_union.nidx) from else null;
+        } else if (from.kind == .array and to.kind == .array_unsized) {
+            return if (from.kind.array.base == to.kind.array_unsized.base) from else null;
         }
-        return false;
+
+        return null;
     }
 
     // pub fn intRank(a: Type, b: Type) u32 {
@@ -445,5 +814,35 @@ pub const TypeChecker = struct {
 
     inline fn put(self: *Self, nidx: NodeIndex, ty: Type) !void {
         try self.unit.node_to_type.put(nidx, ty);
+    }
+};
+
+pub const ConstValue = union(enum) {
+    int_value: u64,
+};
+
+pub const SimpleEvaluator = struct {
+    unit: *Unit,
+
+    const Self = @This();
+    pub fn init(unit: *Unit) Self {
+        return .{
+            .unit = unit,
+        };
+    }
+
+    pub fn evalNode(self: *Self, nidx: NodeIndex) !ConstValue {
+        const node = self.unit.nodes.items[nidx];
+        switch (node.kind) {
+            .int_literal => return .{ .int_value = node.data.long },
+            .unsigned_int_literal => return .{ .int_value = node.data.long },
+            .long_literal => return .{ .int_value = node.data.long },
+            .unsigned_long_literal => return .{ .int_value = node.data.long },
+            .long_long_literal => return .{ .int_value = node.data.long },
+            .unsigned_long_long_literal => return .{ .int_value = node.data.long },
+            .size_literal => return .{ .int_value = node.data.long },
+            .unsigned_size_literal => return .{ .int_value = node.data.long },
+            else => std.debug.panic("Invalid constant value {}", .{nidx}),
+        }
     }
 };

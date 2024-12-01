@@ -23,8 +23,9 @@ typedef struct node {
     struct node n;
 } Node;
 
-int main(float, int) {
-    const int *const (i)(int, float);
+int main(int a, int) {
+    char *c = "foobar";
+    // int i[2] = {1, 2};
     return 1 + 2u + 3uL + 4uLL + 5.0;
 // __DARWIN_ALIAS(fopen);
     // char *c = A(F((y + 2)));
