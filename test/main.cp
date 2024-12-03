@@ -20,19 +20,21 @@
 // #define F(f, x, y) (f, x, y)
 
 struct node {
-    int f : 2;
-    union {
-        int f;
+    struct {
+        int a, b;
     } i;
+    union {
+        int a, b;
+    } f;
 };
 
 int foobar(int, int, ...);
 
 int main(int *a, int c) {
-    int b = *a;
-
+    // int b = *a;
+    int b = a[c];
+    // n.f.a = 34;
     // int i[2] = {1, 2};
-    return 1 + 2u + 3uL + 4uLL + 5.0;
 // __DARWIN_ALIAS(fopen);
     // char *c = A(F((y + 2)));
 

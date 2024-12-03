@@ -3,6 +3,7 @@ const Unit = @import("unit.zig").Unit;
 const NodeIndex = @import("parser.zig").NodeIndex;
 const Node = @import("parser.zig").Node;
 const TokenKind = @import("tokenizer.zig").TokenKind;
+const Type = @import("types.zig").Type;
 
 const Symbol = struct {
     value: []const u8,
@@ -16,14 +17,18 @@ const Value = union(enum) {
     immediate: u64,
     register: u5,
     memory: u32,
+    memory_offset: struct {
+        offset: u32,
+        register: u5,
+    },
 
-    pub fn getValue(self: @This(), cg: *CodeGenerator, imm: bool, mem: bool) !Value {
+    pub fn getValue(self: @This(), cg: *CodeGenerator, ty: Type, imm: bool, mem: bool) !Value {
         switch (self) {
             .immediate => |x| {
                 if (imm) {
                     return self;
                 } else if (cg.availableRegister()) |reg| {
-                    _ = try cg.writeInst(CodeGenerator.dataProcImm(.move, .{
+                    const inst = CodeGenerator.dataProcImm(.move, .{
                         .sfopchwimm16rd = .{
                             .rd = reg,
                             .imm = @truncate(x),
@@ -31,17 +36,54 @@ const Value = union(enum) {
                             .opc = 0b10,
                             .sf = 1,
                         },
-                    }));
+                    });
+                    _ = try cg.writeInst(inst);
                     cg.useRegister(reg);
                     return .{ .register = reg };
                 }
                 _ = mem;
-                
+
+                @panic("shouldbnt be here");
+            },
+            .memory_offset => |mo| {
+                if (cg.availableRegister()) |reg| {
+                    _ = try cg.writeInst(CodeGenerator.formLoad(ty, reg, mo.register, mo.offset));
+                    // _ = try cg.writeInst(CodeGenerator.loadStore(.load_store_register, 0, 0b10, 0, 0, .{
+                    //     .szVopcimm12rnrt = .{
+                    //         .rt = reg,
+                    //         .rn = mo.register,
+                    //         .imm = @truncate(mo.offset),
+                    //         .opc = 0b01,
+                    //         .V = false,
+                    //         .sz = 0b11,
+                    //     },
+                    // }));
+                    cg.useRegister(reg);
+                    return .{ .register = reg };
+                }
                 @panic("shouldbnt be here");
             },
             else => return self,
         }
     }
+};
+
+pub const Layout = struct {
+    size: u32,
+    alignment: u32,
+
+    pub fn max(self: @This()) u32 {
+        return @max(self.size, self.alignment);
+    }
+};
+
+pub const FunctionContext = struct {
+    local_offsets: std.AutoHashMap(NodeIndex, u32),
+    next_offset: u32 = 0,
+};
+
+pub const StructLayout = struct {
+    offsets: std.AutoHashMap(u32, u32),
 };
 
 pub const CodeGenerator = struct {
@@ -56,7 +98,10 @@ pub const CodeGenerator = struct {
     inst_count: u32 = 0,
 
     symbols: std.MultiArrayList(Symbol),
+    structs: std.AutoHashMap(NodeIndex, StructLayout),
     expects_reg: ?u5 = null,
+
+    fctx: ?FunctionContext = null,
 
     registers: [32]bool = [1]bool{false} ** 32,
 
@@ -101,6 +146,7 @@ pub const CodeGenerator = struct {
             .unit = unit,
             .builder = builder,
 
+            .structs = .init(unit.allocator),
             .segment_offset = load_segment,
             .symtab_offset = symtab_segment,
             .text_section_descriptor_offset = 0,
@@ -156,53 +202,65 @@ pub const CodeGenerator = struct {
         const node = self.nodeptr(nidx);
 
         switch (node.kind) {
-            .int_literal => {
-                const ivalue = node.data.as(.two).a;
-                return .{ .immediate = ivalue };
+            .declaration => {
+                var next_index = node.data.as(.two).a;
+                const count = node.data.as(.four).c;
+                const storage = node.data.as(.eight).g;
+                _ = storage;
+
+                const end_index = next_index + count;
+                while (next_index != end_index) : (next_index += 1) {
+                    const node_index = self.unit.node_ranges.items[next_index];
+                    _ = try self.genNode(node_index);
+                }
             },
-            .binary_lr_operator => {
-                const old_expects_reg = self.expects_reg;
-                defer self.expects_reg = old_expects_reg;
-                self.expects_reg = null;
+            .var_declaration_init => {
+                const decl_ty = self.unit.declared_type.get(nidx).?;
+                const layout = self.computeLayout(decl_ty);
 
-                const lvalue = try self.genNode(node.data.as(.two).a);
-                const rvalue = try self.genNode(Node.absoluteIndex(nidx, node.data.as(.four).c));
-                const rrvalue = try rvalue.getValue(self, true, false);
-                const llvalue = try lvalue.getValue(self, rrvalue != .immediate, false);
-                const out_reg = old_expects_reg orelse self.availableRegister().?;
-                const op: TokenKind = @enumFromInt(node.data.as(.four).d);
+                self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
+                const offset = self.fctx.?.next_offset;
+                self.fctx.?.next_offset += layout.max();
+                try self.fctx.?.local_offsets.put(nidx, offset);
+                std.log.info("Var layout: {}", .{layout});
 
-                switch (op) {
-                    .plus, .minus => {
-                        if (llvalue == .register and rrvalue == .register) {
-                            _ = try self.writeInst(CodeGenerator.dataProcReg(.add_sub_shift, .{
-                                .sfopSshRmimmRnRd = .{
-                                    .rd = out_reg,
-                                    .rn = llvalue.register,
-                                    .rm = rrvalue.register,
-                                    .S = false,
-                                    .op = @bitCast(op == .minus),
-                                },
-                            }));
-                        } else if (llvalue == .register and rrvalue == .immediate) {
-                            _ = try self.writeInst(dataProcImm(.add_sub, .{
-                                .sfopSshimm12rnrd = .{
-                                    .op = @bitCast(op == .minus),
-                                    .S = false,
-                                    .imm = @truncate(rrvalue.immediate),
-                                    .rn = llvalue.register,
-                                    .rd = out_reg,
-                                },
-                            }));
-                        } else if (llvalue == .immediate and rrvalue == .register) {
-                            @panic("mmm no");
-                        }
+                const init_index = Node.absoluteIndex(nidx, node.data.as(.four).d);
+                const init_value = try self.genNode(init_index);
+                const value = try init_value.getValue(self, decl_ty, false, false);
+
+                switch (decl_ty.kind) {
+                    .int => {
+                        const sz: u2, const divide: u32 = switch (decl_ty.kind) {
+                            .char => .{ 0b00, 1 },
+                            .short => .{ 0b01, 2 },
+                            .int => .{ 0b10, 4 },
+                            .long => .{ 0b11, 8 },
+                            .longlong => .{ 0b11, 8 },
+                            else => unreachable,
+                        };
+                        _ = try self.writeInst(loadStore(.load_store_register, 0, 0b10, 0, 0, .{
+                            .szVopcimm12rnrt = .{
+                                .rt = value.register,
+                                .rn = SP,
+                                .imm = @truncate(offset / divide),
+                                .opc = 0b00,
+                                .V = false,
+                                .sz = sz,
+                            },
+                        }));
                     },
                     else => {},
                 }
+            },
+            .var_declaration => {
+                const decl_ty = self.unit.declared_type.get(nidx).?;
+                const layout = self.computeLayout(decl_ty);
 
-                self.useRegister(out_reg);
-                return .{ .register = out_reg };
+                self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
+                const offset = self.fctx.?.next_offset;
+                self.fctx.?.next_offset += layout.max();
+                try self.fctx.?.local_offsets.put(nidx, offset);
+                std.log.info("Var layout: {}", .{layout});
             },
             .return_statement => {
                 _ = try self.writeInst(brExcSys(.un_cond_br_reg, .{
@@ -218,7 +276,8 @@ pub const CodeGenerator = struct {
                 defer self.expects_reg = null;
                 self.useRegister(X0);
                 const value = try self.genNode(node.data.as(.two).a);
-                const rrvalue = try value.getValue(self, true, false);
+                const value_ty = self.unit.node_to_type.get(node.data.as(.two).a).?;
+                const rrvalue = try value.getValue(self, value_ty, true, false);
                 if (rrvalue == .immediate) {
                     _ = try self.writeInst(CodeGenerator.dataProcImm(.move, .{
                         .sfopchwimm16rd = .{
@@ -262,10 +321,100 @@ pub const CodeGenerator = struct {
                     },
                 });
 
+                const old_fctx = self.fctx;
+                defer self.fctx = old_fctx;
+                self.fctx = FunctionContext{
+                    .local_offsets = .init(self.allocator),
+                };
+
+                // Subtract from SP for stack frame (placeholder)
+                const sub_sp_index = try self.writeInst(0);
+
+                const fn_type = self.unit.declared_type.get(nidx).?;
+                const fn_param_types = self.unit.interner.getMultiTypes(fn_type.kind.func.params);
+
+                const fn_type_nidx = Node.absoluteIndex(nidx, node.data.four.c);
+                const fn_type_node = &self.unit.nodes.items[fn_type_nidx];
+                var i: u32 = 0;
+                switch (fn_type_node.kind) {
+                    .function_type => {},
+                    .function_type_one_parameter => {
+                        const param_nidx = Node.absoluteIndex(fn_type_nidx, fn_type_node.data.four.b);
+                        const param = &self.unit.nodes.items[param_nidx];
+                        switch (param.kind) {
+                            .parameter => {},
+                            .parameter_ident => {
+                                const layout = self.computeLayout(fn_param_types[i]);
+                                try self.fctx.?.local_offsets.put(param_nidx, 0);
+                                _ = try self.writeInst(formStore(
+                                    fn_param_types[i],
+                                    0,
+                                    SP,
+                                    self.fctx.?.next_offset,
+                                ));
+                                self.fctx.?.next_offset += layout.max();
+                            },
+                            .parameter_ellipsis => {},
+                            else => @panic("compielr bug"),
+                        }
+                    },
+                    .function_type_parameter => {
+                        var index = fn_type_node.data.two.b;
+                        const end_index = index + fn_type_node.data.four.b;
+
+                        while (index < end_index) : (index += 1) {
+                            const param_nidx = self.unit.node_ranges.items[index];
+                            const param = &self.unit.nodes.items[param_nidx];
+                            switch (param.kind) {
+                                .parameter => {},
+                                .parameter_ident => {
+                                    const layout = self.computeLayout(fn_param_types[i]);
+                                    try self.fctx.?.local_offsets.put(param_nidx, 0);
+
+                                    // Parameters after w7 are already on stack
+                                    if (i < X8) {
+                                        _ = try self.writeInst(formStore(
+                                            fn_param_types[i],
+                                            @truncate(i),
+                                            SP,
+                                            self.fctx.?.next_offset,
+                                        ));
+                                    }
+
+                                    self.fctx.?.next_offset += layout.max();
+                                },
+                                .parameter_ellipsis => {},
+                                else => @panic("compielr bug"),
+                            }
+
+                            i += 1;
+                        }
+                    },
+                    else => @panic("compiler bug"),
+                }
+
+                // for (fn_param_types) |param_type| {
+                // }
+
                 const body_index = Node.absoluteIndex(nidx, node.data.as(.four).d);
                 try self.genCompound(body_index);
+
+                _ = try self.writeInstAt(dataProcImm(.add_sub, .{
+                    .sfopSshimm12rnrd = .{
+                        .op = 1,
+                        .S = false,
+                        .imm = @truncate(self.fctx.?.next_offset),
+                        .rn = SP,
+                        .rd = SP,
+                    },
+                }), sub_sp_index);
             },
-            else => std.log.warn("Skipping node {}", .{nidx}),
+            else => {
+                const old_registers = self.registers;
+                const result = try self.genNodeExpr(nidx);
+                self.registers = old_registers;
+                return result;
+            },
         }
 
         return .{ .inst = 0 };
@@ -295,7 +444,6 @@ pub const CodeGenerator = struct {
         //     },
         // }));
 
-
         // _ = try self.writeInst(brExcSys(.un_cond_br_reg, .{
         //     .opcop23Rnop4 = .{
         //         .rn = LR,
@@ -315,10 +463,458 @@ pub const CodeGenerator = struct {
         // });
     }
 
+    pub fn genNodeExpr(self: *Self, nidx: NodeIndex) !Value {
+        const node = &self.unit.nodes.items[nidx];
+        switch (node.kind) {
+            .char_literal => return .{ .immediate = node.data.two.a },
+            .int_literal => return .{ .immediate = node.data.two.a },
+            .unsigned_int_literal => return .{ .immediate = node.data.two.a },
+            .long_literal => return .{ .immediate = node.data.two.a },
+            .unsigned_long_literal => return .{ .immediate = node.data.two.a },
+            .long_long_literal => return .{ .immediate = node.data.two.a },
+            .unsigned_long_long_literal => return .{ .immediate = node.data.two.a },
+            .size_literal => return .{ .immediate = node.data.two.a },
+            .unsigned_size_literal => return .{ .immediate = node.data.two.a },
+            .identifier => {
+                const refed_nidx = self.unit.node_to_node.get(nidx).?;
+                const local = self.fctx.?.local_offsets.get(refed_nidx).?;
+
+                const ident_ty = self.unit.node_to_type.get(nidx).?;
+                const out_reg = self.availableRegister().?;
+                self.useRegister(out_reg);
+                _ = try self.writeInst(formLoad(ident_ty, out_reg, SP, local));
+                return .{ .register = out_reg };
+            },
+            .binary_lr_operator => blk: {
+                const old_expects_reg = self.expects_reg;
+                defer self.expects_reg = old_expects_reg;
+                self.expects_reg = null;
+
+                const op: TokenKind = @enumFromInt(node.data.as(.four).d);
+
+                switch (op) {
+                    .dot => {
+                        const ltype = self.unit.node_to_type.get(node.data.two.a).?;
+                        _ = self.computeLayout(ltype);
+                        const lvalue = try self.genNodeLvalue(node.data.two.a);
+                        // const refed_node = self.unit.node_to_node.get(Node.absoluteIndex(nidx, node.data.four.c)).?;
+
+                        const right_node = &self.unit.nodes.items[Node.absoluteIndex(nidx, node.data.four.c)];
+                        const field_str = self.unit.identifierAt(@bitCast(right_node.data.two.a));
+
+                        const strc_nidx = ltype.getStructureIndex();
+                        const field_offset = switch (ltype.kind) {
+                            .@"struct", .unnamed_struct => blk2: {
+                                const field_map = self.unit.field_map.getPtr(strc_nidx).?;
+                                const field_index = field_map.get(field_str).?;
+                                const strct = self.structs.getPtr(strc_nidx).?;
+                                const field_offset = strct.offsets.get(field_index).?;
+
+                                break :blk2 field_offset;
+                            },
+                            .@"union", .unnamed_union => blk2: {
+                                break :blk2 0;
+                            },
+                            else => unreachable,
+                        };
+
+                        // const out_reg = self.availableRegister().?;
+                        // self.useRegister(out_reg);
+                        // _ = try self.writeInst(formLoad(ident_ty, out_reg, SP, local));
+
+                        // return .{ .register = out_reg };
+
+                        switch (lvalue) {
+                            .memory_offset => |mo| {
+                                return .{
+                                    .memory_offset = .{
+                                        .offset = mo.offset + field_offset,
+                                        .register = mo.register,
+                                    },
+                                };
+                            },
+                            else => @panic(""),
+                        }
+                    },
+                    .assignment => {
+                        const rvalue = try self.genNode(Node.absoluteIndex(nidx, node.data.as(.four).c));
+                        const lvalue = try self.genNodeLvalue(node.data.as(.two).a);
+                        switch (lvalue) {
+                            .memory_offset => |mo| {
+                                const ty = self.unit.node_to_type.get(node.data.two.a).?;
+                                const rrvalue = try rvalue.getValue(self, ty, false, false);
+                                std.log.info("Assign {} {} {}", .{ mo, mo.offset / 4, rvalue });
+                                if (ty.isIntegral()) {
+                                    _ = try self.writeInst(formStore(ty, rrvalue.register, mo.register, mo.offset));
+                                } else {
+                                    @panic("todo");
+                                }
+                            },
+                            else => @panic("Unhandled lavelu assignment"),
+                        }
+
+                        break :blk;
+                    },
+                    else => {},
+                }
+
+                const ty = self.unit.node_to_type.get(nidx).?;
+                const rvalue = try self.genNode(Node.absoluteIndex(nidx, node.data.as(.four).c));
+                const rrvalue = try rvalue.getValue(self, ty, true, false);
+                const lvalue = try self.genNode(node.data.as(.two).a);
+                const llvalue = try lvalue.getValue(self, ty, rrvalue != .immediate, false);
+                const out_reg = old_expects_reg orelse self.availableRegister().?;
+
+                switch (op) {
+                    .plus, .minus => {
+                        if (llvalue == .register and rrvalue == .register) {
+                            _ = try self.writeInst(CodeGenerator.dataProcReg(.add_sub_shift, .{
+                                .sfopSshRmimmRnRd = .{
+                                    .rd = out_reg,
+                                    .rn = llvalue.register,
+                                    .rm = rrvalue.register,
+                                    .S = false,
+                                    .op = @bitCast(op == .minus),
+                                },
+                            }));
+                        } else if (llvalue == .register and rrvalue == .immediate) {
+                            _ = try self.writeInst(dataProcImm(.add_sub, .{
+                                .sfopSshimm12rnrd = .{
+                                    .op = @bitCast(op == .minus),
+                                    .S = false,
+                                    .imm = @truncate(rrvalue.immediate),
+                                    .rn = llvalue.register,
+                                    .rd = out_reg,
+                                },
+                            }));
+                        } else if (llvalue == .immediate and rrvalue == .register) {
+                            @panic("mmm no");
+                        }
+                    },
+                    else => {},
+                }
+
+                self.useRegister(out_reg);
+                return .{ .register = out_reg };
+            },
+            .unary_prefix_operator => {
+                const op: TokenKind = @enumFromInt(node.data.four.c);
+                const expr_val = try self.genNodeExpr(node.data.two.a);
+                switch (op) {
+                    .star => {
+                        const out_reg = self.availableRegister().?;
+                        self.useRegister(out_reg);
+                        const expr_ty = self.unit.node_to_type.get(node.data.two.a).?;
+                        _ = try self.writeInst(formLoad(expr_ty, out_reg, expr_val.register, 0));
+                        return .{ .register = out_reg };
+                    },
+                    else => {},
+                }
+            },
+            .index => {
+                const ptr_ty = self.unit.node_to_type.get(node.data.two.a).?;
+                const offset_ty = self.unit.node_to_type.get(node.data.two.b).?;
+
+                const ptr_val = try self.genNodeExpr(node.data.two.a);
+                const offset_val = try self.genNodeExpr(node.data.two.b);
+                const f_offset_val = try offset_val.getValue(self, offset_ty, true, false);
+
+                const base_off: u32, const elem_ty = switch (ptr_ty.kind) {
+                    .pointer => |ptr| blk: {
+                        // const out_reg = self.availableRegister();
+                        // self.useRegister(out_reg);
+
+                        break :blk .{ 0, ptr.base };
+                        // _ = try self.writeInst(formLoad(ptr.base, out_reg, ptr, offset: u32))
+                    },
+                    .array => |arr| blk: {
+                        break :blk .{ 0, arr.base };
+                    },
+                    .array_unsized => |arr| blk: {
+                        break :blk .{ 0, arr.base };
+                    },
+                    else => unreachable,
+                };
+                _ = base_off;
+
+                const elem_layout = self.computeLayout(elem_ty);
+                switch (f_offset_val) {
+                    .immediate => |val| {
+                        const out_reg = self.availableRegister().?;
+                        self.useRegister(out_reg);
+                        _ = try self.writeInst(formLoad(elem_ty, out_reg, ptr_val.register, @as(u32, @truncate(val)) * elem_layout.size));
+
+                        return .{ .register = out_reg };
+                    },
+                    .register => |reg| {
+                        const offset_reg = self.availableRegister().?;
+                        self.useRegister(offset_reg);
+                        _ = try self.writeInst(CodeGenerator.dataProcImm(.move, .{
+                            .sfopchwimm16rd = .{
+                                .rd = offset_reg,
+                                .imm = @truncate(elem_layout.size),
+                                .hw = 0,
+                                .opc = 0b10,
+                                .sf = 1,
+                            },
+                        }));
+
+                        _ = try self.writeInst(CodeGenerator.dataProcReg(.data_3reg, .{
+                            .sfop54op31Rmop0RaRnRd = .{
+                                .rd = offset_reg,
+                                .rn = reg,
+                                .ra = XZR,
+                                .op0 = 0,
+                                .rm = offset_reg,
+                                .op31 = 0,
+                                .op54 = 0,
+                                .sf = true,
+                            },
+                        }));
+
+                        _ = try self.writeInst(CodeGenerator.dataProcReg(.add_sub_shift, .{
+                            .sfopSshRmimmRnRd = .{
+                                .rd = offset_reg,
+                                .rn = ptr_val.register,
+                                .rm = offset_reg,
+                                .S = false,
+                                .op = 0,
+                            },
+                        }));
+
+                        const out_reg = self.availableRegister().?;
+                        self.useRegister(out_reg);
+                        _ = try self.writeInst(formLoad(elem_ty, out_reg, offset_reg, 0));
+
+                        return .{ .register = out_reg };
+                    },
+                    else => @panic("Unsupported index"),
+                }
+            },
+            else => std.log.warn("Skipping node {}", .{nidx}),
+        }
+
+        return .{ .inst = 0 };
+    }
+
+    pub fn genNodeLvalue(self: *Self, nidx: NodeIndex) !Value {
+        const node = &self.unit.nodes.items[nidx];
+        switch (node.kind) {
+            .identifier => {
+                const referred_nidx = self.unit.node_to_node.get(nidx).?;
+                if (self.fctx.?.local_offsets.get(referred_nidx)) |vr| {
+                    return .{
+                        .memory_offset = .{
+                            .offset = vr,
+                            .register = SP,
+                        },
+                    };
+                }
+
+                @panic("unhandled lvalue");
+            },
+            .binary_lr_operator => {
+                const old_expects_reg = self.expects_reg;
+                defer self.expects_reg = old_expects_reg;
+                self.expects_reg = null;
+
+                const op: TokenKind = @enumFromInt(node.data.as(.four).d);
+                switch (op) {
+                    .dot => {
+                        const ltype = self.unit.node_to_type.get(node.data.two.a).?;
+                        _ = self.computeLayout(ltype);
+                        const lvalue = try self.genNodeLvalue(node.data.two.a);
+                        // const refed_node = self.unit.node_to_node.get(Node.absoluteIndex(nidx, node.data.four.c)).?;
+
+                        const right_node = &self.unit.nodes.items[Node.absoluteIndex(nidx, node.data.four.c)];
+                        const field_str = self.unit.identifierAt(@bitCast(right_node.data.two.a));
+
+                        const strc_nidx = ltype.getStructureIndex();
+                        const field_offset = switch (ltype.kind) {
+                            .@"struct", .unnamed_struct => blk2: {
+                                const field_map = self.unit.field_map.getPtr(strc_nidx).?;
+                                const field_index = field_map.get(field_str).?;
+                                const strct = self.structs.getPtr(strc_nidx).?;
+                                const field_offset = strct.offsets.get(field_index).?;
+
+                                break :blk2 field_offset;
+                            },
+                            .@"union", .unnamed_union => blk2: {
+                                break :blk2 0;
+                            },
+                            else => unreachable,
+                        };
+
+                        switch (lvalue) {
+                            .memory_offset => |mo| {
+                                return .{
+                                    .memory_offset = .{
+                                        .offset = mo.offset + field_offset,
+                                        .register = mo.register,
+                                    },
+                                };
+                            },
+                            else => @panic(""),
+                        }
+                    },
+                    else => {},
+                }
+                const rvalue = try self.genNode(Node.absoluteIndex(nidx, node.data.as(.four).c));
+                _ = rvalue;
+                @panic("foo");
+            },
+            else => @panic("unhandled node"),
+        }
+    }
+
+    pub fn computeLayout(self: *Self, ty: Type) Layout {
+        return switch (ty.kind) {
+            .char => .{ .size = 1, .alignment = 1 },
+            .short => .{ .size = 2, .alignment = 2 },
+            .int => .{ .size = 4, .alignment = 4 },
+            .long => .{ .size = 8, .alignment = 8 },
+            .longlong => .{ .size = 8, .alignment = 8 },
+            .float => .{ .size = 4, .alignment = 4 },
+            .double => .{ .size = 8, .alignment = 8 },
+            .longdouble => .{ .size = 16, .alignment = 16 },
+            .pointer => .{ .size = 8, .alignment = 8 },
+            .array => |arr| blk: {
+                const base_layout = self.computeLayout(arr.base);
+                break :blk .{ .size = base_layout.size * @as(u32, @truncate(arr.size)), .alignment = base_layout.alignment };
+            },
+            .@"struct", .unnamed_struct => blk: {
+                const fields = switch (ty.kind) {
+                    .@"struct" => |st| self.unit.interner.getMultiTypes(st.fields),
+                    .unnamed_struct => |st| self.unit.interner.getMultiTypes(st.fields),
+                    else => unreachable,
+                };
+                const nidx = switch (ty.kind) {
+                    .@"struct" => |st| st.nidx,
+                    .unnamed_struct => |st| st.nidx,
+                    else => unreachable,
+                };
+                var field_offsets = std.AutoHashMap(u32, u32).init(self.unit.allocator);
+                var offset: u32 = 0;
+                var largest_alignment: u32 = 0;
+                for (fields, 0..) |field, i| {
+                    switch (field.kind) {
+                        .field => |f| {
+                            const layout = self.computeLayout(f.ty);
+                            if (layout.alignment > largest_alignment) {
+                                largest_alignment = layout.alignment;
+                            }
+                            offset = std.mem.alignForward(u32, offset, layout.alignment);
+                            field_offsets.put(@truncate(i), offset) catch @panic("OOM");
+                            offset += layout.size;
+                        },
+                        else => {
+                            const layout = self.computeLayout(field);
+                            if (layout.alignment > largest_alignment) {
+                                largest_alignment = layout.alignment;
+                            }
+
+                            offset = std.mem.alignForward(u32, offset, layout.alignment);
+                            field_offsets.put(@truncate(i), offset) catch @panic("OOM");
+                            offset += layout.size;
+                        },
+                    }
+                }
+
+                self.structs.put(nidx, .{ .offsets = field_offsets }) catch @panic("oom");
+                offset = std.mem.alignForward(u32, offset, largest_alignment);
+                break :blk .{ .size = offset, .alignment = largest_alignment };
+            },
+            .@"union", .unnamed_union => blk: {
+                const fields = switch (ty.kind) {
+                    .@"union" => |st| self.unit.interner.getMultiTypes(st.variants),
+                    .unnamed_union => |st| self.unit.interner.getMultiTypes(st.variants),
+                    else => unreachable,
+                };
+                var largest_alignment: u32 = 0;
+                var largest_size: u32 = 0;
+                for (fields) |field| {
+                    switch (field.kind) {
+                        .field => |f| {
+                            const layout = self.computeLayout(f.ty);
+                            if (layout.alignment > largest_alignment) {
+                                largest_alignment = layout.alignment;
+                            }
+                            if (layout.size > largest_size) {
+                                largest_size = layout.size;
+                            }
+                        },
+                        else => {
+                            const layout = self.computeLayout(field);
+                            if (layout.alignment > largest_alignment) {
+                                largest_alignment = layout.alignment;
+                            }
+                            if (layout.size > largest_size) {
+                                largest_size = layout.size;
+                            }
+                        },
+                    }
+                }
+
+                largest_size = std.mem.alignForward(u32, largest_size, largest_alignment);
+                break :blk .{ .size = largest_size, .alignment = largest_alignment };
+            },
+            else => @panic("umm"),
+        };
+    }
+
+    pub fn formLoad(ty: Type, out_reg: u5, offset_reg: u5, offset: u32) u32 {
+        // const out_reg = self.availableRegister().?;
+        // self.useRegister(out_reg);
+
+        const sz: u2, const divide: u32 = switch (ty.kind) {
+            .char => .{ 0b00, 1 },
+            .short => .{ 0b01, 2 },
+            .int => .{ 0b10, 4 },
+            .long => .{ 0b11, 8 },
+            .longlong => .{ 0b11, 8 },
+            .pointer => .{ 0b11, 8 },
+            else => unreachable,
+        };
+
+        return loadStore(.load_store_register, 0, 0b10, 0, 0, .{
+            .szVopcimm12rnrt = .{
+                .rt = out_reg,
+                .rn = offset_reg,
+                .imm = @truncate(offset / divide),
+                .opc = 0b01,
+                .V = false,
+                .sz = sz,
+            },
+        });
+    }
+
+    pub fn formStore(ty: Type, in_reg: u5, offset_reg: u5, offset: u32) u32 {
+        const sz: u2, const divide: u32 = switch (ty.kind) {
+            .char => .{ 0b00, 1 },
+            .short => .{ 0b01, 2 },
+            .int => .{ 0b10, 4 },
+            .long => .{ 0b11, 8 },
+            .longlong => .{ 0b11, 8 },
+            .pointer => .{ 0b11, 8 },
+            else => unreachable,
+        };
+
+        return loadStore(.load_store_register, 0, 0b10, 0, 0, .{
+            .szVopcimm12rnrt = .{
+                .rt = in_reg,
+                .rn = offset_reg,
+                .imm = @truncate(offset / divide),
+                .opc = 0b00,
+                .V = false,
+                .sz = sz,
+            },
+        });
+    }
+
     pub fn loadStore(op0: enum(u4) {
         load_store_register = 0b0011,
     }, op1: u1, op2: u2, op3: u6, op4: u2, data: OPS) u32 {
-        return @as(u32, 0x08000000) | (@as(u32, @intFromEnum(op0) << 28)) | (@as(u32, op1) << 26) | (@as(u32, op2) << 23) | (@as(u32, op3) << 16) | (@as(u32, op4) << 10) | @as(u32, @bitCast(data));
+        return @as(u32, 0x08000000) | (@as(u32, @intFromEnum(op0)) << 28) | (@as(u32, op1) << 26) | (@as(u32, op2) << 23) | (@as(u32, op3) << 16) | (@as(u32, op4) << 10) | @as(u32, @bitCast(data));
     }
 
     pub fn dataProcImm(op: enum(u32) {
@@ -331,6 +927,7 @@ pub const CodeGenerator = struct {
     pub fn dataProcReg(op: enum(u32) {
         logical_shift = 0x00000000,
         add_sub_shift = 0x01000000,
+        data_3reg = 0x11000000,
     }, data: OPS) u32 {
         return @as(u32, 0x0a000000) | @intFromEnum(op) | @as(u32, @bitCast(data));
     }
@@ -343,6 +940,16 @@ pub const CodeGenerator = struct {
     }
 
     pub const OPS = packed union {
+        szVopcimm12rnrt: packed struct(u32) {
+            rt: u5,
+            rn: u5,
+            imm: u12,
+            opc: u2,
+            _1: u2 = 0,
+            V: bool,
+            _2: u3 = 0,
+            sz: u2,
+        },
         sfopSshimm12rnrd: packed struct(u32) {
             rd: u5,
             rn: u5,
@@ -387,9 +994,20 @@ pub const CodeGenerator = struct {
             rm: u5,
             _1: u1 = 0,
             shift: u2 = 0,
-            _2: u5= 0,
+            _2: u5 = 0,
             S: bool,
             op: u1,
+            sf: bool = true,
+        },
+        sfop54op31Rmop0RaRnRd: packed struct(u32) {
+            rd: u5,
+            rn: u5,
+            ra: u5,
+            op0: u1,
+            rm: u5,
+            op31: u3,
+            _1: u5 = 0,
+            op54: u2,
             sf: bool = true,
         },
         // szVRmoptSRnRt: packed struct(u32) {
@@ -410,6 +1028,10 @@ pub const CodeGenerator = struct {
         return try self.builder.writeInt(inst);
     }
 
+    pub fn writeInstAt(self: *Self, inst: u32, offset: u32) !u32 {
+        return try self.builder.writeIntAt(inst, offset);
+    }
+
     pub fn writeToFile(self: *Self, path: []const u8) !void {
         self.builder.ptrTo(std.macho.segment_command_64, self.segment_offset).filesize = self.inst_count * @sizeOf(u32);
         self.builder.ptrTo(std.macho.segment_command_64, self.segment_offset).vmsize = self.inst_count * @sizeOf(u32);
@@ -426,7 +1048,7 @@ pub const CodeGenerator = struct {
 
         var next_offset: u32 = 0;
         const syms_offset = self.builder.currentOffset();
-        for (self.symbols.items(.ty),self.symbols.items(.address), self.symbols.items(.value)) |ty, addr, value| {
+        for (self.symbols.items(.ty), self.symbols.items(.address), self.symbols.items(.value)) |ty, addr, value| {
             const offset = try self.builder.writeSymbolEntry(self.symtab_offset, next_offset, ty);
             self.builder.ptrTo(std.macho.nlist_64, offset).n_sect = 1;
             self.builder.ptrTo(std.macho.nlist_64, offset).n_value = addr;
@@ -557,9 +1179,23 @@ pub const MachoBuilder = struct {
 
         const offset = self.currentOffset();
         const value_ptr: *const @TypeOf(value) = &value;
-        const byte_ptr: *@TypeOf(value) = @alignCast(@ptrCast(&self.buffer.items.ptr[self.buffer.items.len]));
         try self.buffer.ensureUnusedCapacity(@sizeOf(@TypeOf(value)));
+        const byte_ptr: *@TypeOf(value) = @alignCast(@ptrCast(&self.buffer.items.ptr[self.buffer.items.len]));
         self.buffer.items.len += @sizeOf(@TypeOf(value));
+        byte_ptr.* = value_ptr.*;
+        // try self.buffer.appendSlice(byte_ptr[0..@sizeOf(std.meta.Child(@TypeOf(value)))]);
+        return offset;
+    }
+
+    pub fn writeIntAt(self: *Self, value: anytype, offset: u32) !u32 {
+        const ty_info = @typeInfo(@TypeOf(value));
+        std.debug.assert(ty_info == .int);
+        std.debug.assert(std.mem.isAligned(offset, @alignOf(@TypeOf(value))));
+        std.debug.assert(offset < self.buffer.items.len);
+        std.debug.assert(offset + @sizeOf(@TypeOf(value)) < self.buffer.items.len);
+
+        const value_ptr: *const @TypeOf(value) = &value;
+        const byte_ptr: *@TypeOf(value) = @alignCast(@ptrCast(&self.buffer.items.ptr[offset]));
         byte_ptr.* = value_ptr.*;
         // try self.buffer.appendSlice(byte_ptr[0..@sizeOf(std.meta.Child(@TypeOf(value)))]);
         return offset;
@@ -600,6 +1236,7 @@ pub const MachoBuilder = struct {
 };
 
 const SP: u5 = 31;
+const XZR: u5 = 31;
 const LR: u5 = 30;
 const X0: u5 = 0;
 const X1: u5 = 1;

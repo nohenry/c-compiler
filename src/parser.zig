@@ -112,7 +112,7 @@ pub const NodeKind = enum(u32) {
     function_type_one_parameter,
     /// node_data: a(u16) = relative index of return type,
     ///            b(u16)  = parameter type count
-    ///            b(u32) = relative index of parameter type start,
+    ///            b(u32) = index of parameter type start,
     function_type_parameter,
 
     /// node_data: a(u16) = relative index of type, c(u8) = storage class

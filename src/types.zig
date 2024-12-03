@@ -61,6 +61,9 @@ pub const TypeKind = struct {
             base: Type,
             bits: u32,
         },
+        lvalue_ref: struct {
+            base: Type,
+        },
 
         multi_type: []const Type,
         multi_type_impl: MultiType,
@@ -107,6 +110,16 @@ pub const TypeKind = struct {
             //     return st.variants.kind.multi_type_keyed.get(field_name);
             // },
             // .@"struct", .unnamed_struct, .@"union", .unnamed_union => true,
+            else => unreachable,
+        };
+    }
+
+    pub fn getStructureIndex(self: *const @This()) NodeIndex {
+        return switch (self.kind) {
+            .@"struct" => |st| st.nidx,
+            .unnamed_struct => |st| st.nidx,
+            .@"union" => |st| st.nidx,
+            .unnamed_union => |st| st.nidx,
             else => unreachable,
         };
     }
@@ -464,6 +477,10 @@ pub const TypeInterner = struct {
         return self.multi_types.items[multi_type.kind.multi_type_impl.start .. multi_type.kind.multi_type_impl.start + multi_type.kind.multi_type_impl.len];
     }
 
+    pub fn lvalueRefTy(self: *Self, base: Type) Type {
+        return self.createOrGetTy(.{ .lvalue_ref = .{ .base = base } }, 0);
+    }
+
     pub fn funcTyNoParams(self: *Self, ret_ty: Type, variadic: bool) Type {
         return self.funcTy(&.{}, ret_ty, variadic);
     }
@@ -591,6 +608,11 @@ pub const TypeInterner = struct {
             .bitfield => |bf| {
                 try self.printTyWriter(bf.base, false, writer);
                 try writer.print(" : {}", .{bf.bits});
+            },
+
+            .lvalue_ref => |ref| {
+                try self.printTyWriter(ref.base, false, writer);
+                try writer.print("(ref)", .{});
             },
 
             .multi_type => |tys| {

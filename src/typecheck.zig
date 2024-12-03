@@ -23,15 +23,15 @@ pub const TypeChecker = struct {
         const node = &self.unit.nodes.items[nidx];
         const result: Type = switch (node.kind) {
             .empty => return self.unit.interner.voidTy(),
-            .char_literal => return self.unit.interner.charTy(true, 0),
-            .float_literal => return self.unit.interner.floatTy(0),
-            .double_literal => return self.unit.interner.doubleTy(0),
-            .int_literal => return self.unit.interner.intTy(true, 0),
-            .unsigned_int_literal => return self.unit.interner.intTy(false, 0),
-            .long_literal => return self.unit.interner.longTy(true, 0),
-            .unsigned_long_literal => return self.unit.interner.longTy(false, 0),
-            .long_long_literal => return self.unit.interner.longlongTy(true, 0),
-            .unsigned_long_long_literal => return self.unit.interner.longlongTy(false, 0),
+            .char_literal => self.unit.interner.charTy(true, 0),
+            .float_literal => self.unit.interner.floatTy(0),
+            .double_literal => self.unit.interner.doubleTy(0),
+            .int_literal => self.unit.interner.intTy(true, 0),
+            .unsigned_int_literal => self.unit.interner.intTy(false, 0),
+            .long_literal => self.unit.interner.longTy(true, 0),
+            .unsigned_long_literal => self.unit.interner.longTy(false, 0),
+            .long_long_literal => self.unit.interner.longlongTy(true, 0),
+            .unsigned_long_long_literal => self.unit.interner.longlongTy(false, 0),
             .string_literal => return self.unit.interner.arrayTy(
                 self.unit.interner.charTy(false, 0),
                 self.unit.stringAt(@bitCast(node.data.two.a)).len,
@@ -109,6 +109,23 @@ pub const TypeChecker = struct {
             },
             .binary_lr_operator => blk: {
                 const op: TokenKind = @enumFromInt(node.data.four.d);
+                // switch (op) {
+                //     .assignment,
+                //     .plus_eq,
+                //     .minus_eq,
+                //     .star_eq,
+                //     .slash_eq,
+                //     .percent_eq,
+                //     .left_shift_eq,
+                //     .right_shift_eq,
+                //     .ampersand_eq,
+                //     .carot_eq,
+                //     .pipe_eq,
+                //     => {
+
+                //     },
+                //     else => {},
+                // }
                 const left = try self.checkNode(node.data.two.a, null);
                 if (op == .dot) {
                     if (!left.isStructured()) {
@@ -138,9 +155,26 @@ pub const TypeChecker = struct {
                                     self.unit.interner.printTyToStr(left, self.unit.allocator),
                                 });
                             };
+                            const refed_nidx = switch (left.kind) {
+                                .@"struct", .@"union" => field_node: {
+                                    const str_node = &self.unit.nodes.items[st_nidx - 1];
+                                    break :field_node self.unit.node_ranges.items[str_node.data.two.a + field_index];
+                                },
+                                .unnamed_struct, .unnamed_union => field_node: {
+                                    const str_node = &self.unit.nodes.items[st_nidx];
+                                    break :field_node self.unit.node_ranges.items[str_node.data.two.a + field_index];
+                                },
+                                else => unreachable,
+                            };
+                            try self.unit.node_to_node.put(Node.absoluteIndex(nidx, node.data.four.c), refed_nidx);
+
                             const field_tys = self.unit.interner.getMultiTypes(fields_multi_type);
                             const field = field_tys[field_index];
                             switch (field.kind) {
+                                // .field => {
+                                //     try self.unit.node_to_node.put(right_node.data.two.a, field.kind.field.nidx);
+                                //     break :blk field.kind.field.base;
+                                // },
                                 .bitfield => {
                                     break :blk field.kind.bitfield.base;
                                 },
@@ -304,6 +338,20 @@ pub const TypeChecker = struct {
                             self.unit.interner.printTyToStr(left, self.unit.allocator),
                             self.unit.interner.printTyToStr(right, self.unit.allocator),
                         });
+                    },
+                    .assignment,
+                    .plus_eq,
+                    .minus_eq,
+                    .star_eq,
+                    .slash_eq,
+                    .percent_eq,
+                    .left_shift_eq,
+                    .right_shift_eq,
+                    .ampersand_eq,
+                    .carot_eq,
+                    .pipe_eq,
+                    => {
+                        break :blk left;
                     },
                     else => std.debug.panic("Unexpected op {}", .{op}),
                 }
