@@ -431,7 +431,7 @@ pub const Node = extern struct {
                 result = .{ .node = self.data.as(.two).a };
             },
             .stringified_literal => try writer.print("\x1b[1;35mStringifiedLiteral\x1b[0m \x1b[1;33m\"{s}\"\x1b[0m", .{unit.stringifiedAt(@bitCast(self.data.as(.two).a))}),
-            .char_literal => try writer.print("\x1b[1;35mCharLiteral\x1b[0m \x1b[1;33m'{c}'\x1b[0m", .{unit.charAt(@bitCast(self.data.as(.two).a))}),
+            .char_literal => try writer.print("\x1b[1;35mCharLiteral\x1b[0m \x1b[1;33m'{c}'\x1b[0m", .{@as(u8, @truncate(self.data.two.a))}),
             .declaration => {
                 const next_index = self.data.as(.two).a;
                 const count = self.data.as(.four).c;
@@ -3032,7 +3032,7 @@ pub const Parser = struct {
                     .kind = .binary_lr_operator,
                     .data = bin_op_data,
                 });
-            } else if (unary_prec_right > prec and unary_prec_right != 0) {
+            } else if (unary_prec_right > last_prec and unary_prec_right != 0) {
                 self.nextToken();
 
                 var unary_data: NodeData = undefined;
@@ -3297,7 +3297,7 @@ pub const Parser = struct {
             .char_literal => Node{
                 .kind = .char_literal,
                 .data = .{
-                    .two = .{ .a = @bitCast(ptok.index), .b = 0 },
+                    .two = .{ .a = self.unit.charAt(@bitCast(ptok.index)), .b = 0 },
                 },
             },
             .identifier => {
