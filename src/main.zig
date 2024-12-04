@@ -7,6 +7,36 @@ const cg = @import("codegen.zig");
 const TypeChecker = @import("typecheck.zig").TypeChecker;
 const TypeInterner = @import("types.zig").TypeInterner;
 
+pub fn compileLog(
+    comptime message_level: std.log.Level,
+    comptime scope: @Type(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const level_txt = comptime message_level.asText();
+    const level_fmt = switch (message_level) {
+        .debug => "\x1b[1;35m",
+        .info => "\x1b[1;36m",
+        .warn => "\x1b[1;36m",
+        .err => "\x1b[1;31m",
+    };
+    const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+    const stderr = std.io.getStdErr().writer();
+    var bw = std.io.bufferedWriter(stderr);
+    const writer = bw.writer();
+
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    nosuspend {
+        writer.print("cp: " ++ level_fmt ++ level_txt ++ prefix2 ++ "\x1b[0;1m" ++ format ++ "\x1b[0m\n", args) catch return;
+        bw.flush() catch return;
+    }
+}
+
+pub const std_options: std.Options = .{
+    .logFn = compileLog,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var argv = std.process.args();
@@ -14,6 +44,7 @@ pub fn main() !void {
 
     var defines = std.ArrayList([]const u8).init(gpa.allocator());
     var include_paths = std.ArrayList([]const u8).init(gpa.allocator());
+    _ = argv.next(); // program name
     while (argv.next()) |arg| {
         switch (arg[0]) {
             '-' => {
@@ -24,6 +55,17 @@ pub fn main() !void {
                     'I' => {
                         try include_paths.append(arg[2..]);
                     },
+                    'O' => {},
+                    'v' => {
+                        const version =
+                            \\CP version 0.0.1
+                            \\Target: arm64-apple-darwin23.3.0
+                            \\Thread model: posix
+                            \\InstalledDir: /Users/oliverclarke/Documents/dev/cp/zig-out/bin
+                        ;
+                        std.debug.print("{s}\n", .{version});
+                        return;
+                    },
                     else => std.log.warn("Unused argument {s}", .{arg}),
                 }
             },
@@ -32,6 +74,12 @@ pub fn main() !void {
             },
         }
     }
+
+    if (source_file == null) {
+        std.log.err("no input files", .{});
+        return;
+    }
+    std.log.debug("File: {s}", .{source_file.?});
 
     const source = try std.fs.cwd().readFileAlloc(gpa.allocator(), source_file.?, std.math.maxInt(usize));
 

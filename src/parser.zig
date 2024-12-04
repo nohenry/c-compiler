@@ -2685,6 +2685,29 @@ pub const Parser = struct {
                     .data = undefined,
                 });
             },
+            .identifier => {
+                self.nextToken();
+                const ntok = self.peekToken();
+
+                if (ntok != null and ntok.?.token.kind == .colon) {
+                    self.nextToken();
+                    const stmt = try self.parseStatement();
+                    return try self.createNode(Node{
+                        .kind = .label,
+                        .data = .{
+                            .two = .{ .a = @bitCast(ptok.index), .b = stmt },
+                        },
+                    });
+                } else {
+                    const left = try self.createNode(Node{
+                        .kind = .identifier,
+                        .data = .{
+                            .two = .{ .a = @bitCast(ptok.index), .b = 0 },
+                        },
+                    });
+                    return try self.parseOperatorExpressionWithLeft(0, left);
+                }
+            },
             else => {
                 const result = try self.parseExpression();
                 const node = self.unit.nodes.items[result];
@@ -2995,8 +3018,14 @@ pub const Parser = struct {
             left = try self.parsePrimaryExpression();
         }
 
+        return try self.parseOperatorExpressionWithLeft(last_prec, left);
+    }
+
+    pub fn parseOperatorExpressionWithLeft(self: *Self, last_prec: u16, lleft: NodeIndex) (ParseError || std.mem.Allocator.Error)!NodeIndex {
+        var left = lleft;
+
         while (true) {
-            op = self.peekToken();
+            const op = self.peekToken();
             if (op == null) break;
             const prec = binaryPrecedence(&op.?.token);
             const prec_right = binaryPrecedenceRight(&op.?.token);

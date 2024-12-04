@@ -253,7 +253,7 @@ pub const keyword_map = std.StaticStringMap(TokenKind).initComptime(&.{
     .{ "register", .register },
     .{ "restrict", .restrict },
     .{ "return", .@"return" },
-    .{ "sizeof", .@"sizeof" },
+    .{ "sizeof", .sizeof },
     .{ "static", .static },
     .{ "static_assert", .static_assert },
     .{ "struct", .@"struct" },
@@ -377,7 +377,7 @@ pub const FileTokenizer = struct {
             @truncate(self.tokenizer.unit.tokens(file_index).items.len - 1);
     }
 
-    pub fn nextVirtual(self: *Self) struct{?TokenIndex, bool} {
+    pub fn nextVirtual(self: *Self) struct { ?TokenIndex, bool } {
         while (self.tokenizer.virtual_stack.items.len > 0) : (self.tokenizer.virtual_stack.items.len -= 1) {
             const item_index = self.tokenizer.virtual_stack.getLast();
             if (item_index.start.index < item_index.end.index) {
@@ -395,10 +395,10 @@ pub const FileTokenizer = struct {
                             .start = tok.start,
                         }) catch @panic("OOM");
 
-                        return .{new_tok_index, (item_index.flags & TokenRange.Flags.ALREADY_EXPANDED) > 0};
+                        return .{ new_tok_index, (item_index.flags & TokenRange.Flags.ALREADY_EXPANDED) > 0 };
                     }
                 }
-                return .{item_index.start, (item_index.flags & TokenRange.Flags.ALREADY_EXPANDED) > 0};
+                return .{ item_index.start, (item_index.flags & TokenRange.Flags.ALREADY_EXPANDED) > 0 };
             }
 
             if ((item_index.flags & TokenRange.Flags.EXPANSION_ARGUMENTS) > 0) {
@@ -410,7 +410,7 @@ pub const FileTokenizer = struct {
             }
         }
 
-        return .{null, false};
+        return .{ null, false };
     }
 
     pub inline fn currentRangeData(self: *Self) i16 {
@@ -515,7 +515,6 @@ pub const FileTokenizer = struct {
         const virt = self.nextVirtual();
         if (virt[1]) return virt[0];
         const tidx = virt[0] orelse {
-
             if (last_arg) |arg| {
                 if (arg.hasSingleExpandedToken()) {
                     return arg.expanded_tokens[0].start;
@@ -683,7 +682,7 @@ pub const FileTokenizer = struct {
                             break :blk;
                         }
                     }
-                    std.debug.panic("Unsupported concatenated token! Tried to create \x1b[1m'{s}{s}'\x1b[0m", .{last_tok_slice, next_tok_slice});
+                    std.debug.panic("Unsupported concatenated token! Tried to create \x1b[1m'{s}{s}'\x1b[0m", .{ last_tok_slice, next_tok_slice });
                 }
 
                 if (copy_source_index) |csi| {
@@ -714,7 +713,6 @@ pub const FileTokenizer = struct {
             },
             else => {
                 if (last_token != null) {
-
                     self.backVirtual();
                     const last_tidx = last_token.?;
                     if (last_arg) |arg| {
@@ -731,7 +729,6 @@ pub const FileTokenizer = struct {
                             return self.resolveVirtual(null, null);
                         }
                     }
-
 
                     return last_tidx;
                 }
@@ -1538,9 +1535,9 @@ pub const FileTokenizer = struct {
                         const define_str = self.tokenizer.unit.identifierAt(first_token.?);
                         var var_arg = false;
 
-                    if (std.mem.eql(u8, define_str, "__header_inline")) {
-                        std.log.debug("__header_inline", .{});
-                    }
+                        if (std.mem.eql(u8, define_str, "__header_inline")) {
+                            std.log.debug("__header_inline", .{});
+                        }
 
                         if (second_token != null and self.tokenizer.unit.token(second_token.?).kind == .open_paren) {
                             // Function type macro
@@ -1608,13 +1605,13 @@ pub const FileTokenizer = struct {
                             if (std.mem.eql(u8, define_str, "__SPI_AVAILABLE_END")) {
                                 std.log.debug("__SPI_AVAILABLE_END", .{});
                             }
-                            std.log.debug("DefineFunction \x1b[1;36m'{s}'\x1b[0m {}:{} - {}:{}", .{
-                                define_str,
-                                define.value_ptr.*.range.start.file_index,
-                                define.value_ptr.*.range.start.index,
-                                define.value_ptr.*.range.end.file_index,
-                                define.value_ptr.*.range.end.index,
-                            });
+                            // std.log.debug("DefineFunction \x1b[1;36m'{s}'\x1b[0m {}:{} - {}:{}", .{
+                            //     define_str,
+                            //     define.value_ptr.*.range.start.file_index,
+                            //     define.value_ptr.*.range.start.index,
+                            //     define.value_ptr.*.range.end.file_index,
+                            //     define.value_ptr.*.range.end.index,
+                            // });
                         } else {
                             // Value type macro
                             var count: u32 = 0; // starts at one because of second_token
@@ -1640,13 +1637,13 @@ pub const FileTokenizer = struct {
                                     .flags = 0,
                                 },
                             };
-                            std.log.debug("Define \x1b[1;36m'{s}'\x1b[0m {}:{} - {}:{}", .{
-                                define_str,
-                                define.value_ptr.*.range.start.file_index,
-                                define.value_ptr.*.range.start.index,
-                                define.value_ptr.*.range.end.file_index,
-                                define.value_ptr.*.range.end.index,
-                            });
+                            // std.log.debug("Define \x1b[1;36m'{s}'\x1b[0m {}:{} - {}:{}", .{
+                            //     define_str,
+                            //     define.value_ptr.*.range.start.file_index,
+                            //     define.value_ptr.*.range.start.index,
+                            //     define.value_ptr.*.range.end.file_index,
+                            //     define.value_ptr.*.range.end.index,
+                            // });
                         }
                     } else if (std.mem.eql(u8, directive_str, "include")) {
                         const first_token_index = self.tokenizer.next(true) orelse @panic("Unexpected end of input");
@@ -1990,7 +1987,6 @@ pub const Tokenizer = struct {
             self.virtual_stack.append(rng) catch @panic("OOM");
         }
     }
-
 
     /// Returns the top of the virtual token stack
     inline fn currentRange(self: *Self) TokenRange {

@@ -68,6 +68,12 @@ const Value = union(enum) {
                 }
                 @panic("shouldbnt be here");
             },
+            .register => |reg| {
+                if (result_ty) |rty| {
+                    _ = try cg.writeCast(ty, rty, reg, reg);
+                }
+                return self;
+            },
             else => return self,
         }
     }
@@ -224,7 +230,7 @@ pub const CodeGenerator = struct {
 
                 const init_index = Node.absoluteIndex(nidx, node.data.as(.four).d);
                 const init_value = try self.genNodeExpr(init_index, decl_ty);
-                const value = try init_value.getValue(self, decl_ty, null, false, false);
+                const value = try init_value.getValue(self, decl_ty, decl_ty, false, false);
 
                 _ = try self.writeInst(formStore(decl_ty, value.register, SP, offset));
             },
@@ -476,6 +482,7 @@ pub const CodeGenerator = struct {
     }
 
     pub fn genNodeExpr(self: *Self, nidx: NodeIndex, result_ty: ?Type) !Value {
+        _ = result_ty;
         const node = &self.unit.nodes.items[nidx];
         switch (node.kind) {
             .char_literal => return .{ .immediate = node.data.two.a },
@@ -488,18 +495,31 @@ pub const CodeGenerator = struct {
             .size_literal => return .{ .immediate = node.data.two.a },
             .unsigned_size_literal => return .{ .immediate = node.data.two.a },
             .identifier => {
-                const refed_nidx = self.unit.node_to_node.get(nidx).?;
-                const local = self.fctx.?.local_offsets.get(refed_nidx).?;
+                // const refed_nidx = self.unit.node_to_node.get(nidx).?;
+                // const local = self.fctx.?.local_offsets.get(refed_nidx).?;
 
-                const ident_ty = self.unit.node_to_type.get(nidx).?;
-                const out_reg = self.availableRegister().?;
-                self.useRegister(out_reg);
-                if (result_ty) |rty| {
-                    try self.writeCastLoad(ident_ty, rty, out_reg, SP, local);
-                } else {
-                    _ = try self.writeInst(formLoad(ident_ty, out_reg, SP, local));
+                // const ident_ty = self.unit.node_to_type.get(nidx).?;
+                // const out_reg = self.availableRegister().?;
+                // self.useRegister(out_reg);
+
+                const referred_nidx = self.unit.node_to_node.get(nidx).?;
+                if (self.fctx.?.local_offsets.get(referred_nidx)) |vr| {
+                    return .{
+                        .memory_offset = .{
+                            .offset = vr,
+                            .register = SP,
+                        },
+                    };
                 }
-                return .{ .register = out_reg };
+
+                @panic("unhandled lvalue");
+
+                // if (result_ty) |rty| {
+                //     try self.writeCastLoad(ident_ty, rty, out_reg, SP, local);
+                // } else {
+                //     _ = try self.writeInst(formLoad(ident_ty, out_reg, SP, local));
+                // }
+                // return .{ .register = out_reg };
             },
             .binary_lr_operator => blk: {
                 const old_expects_reg = self.expects_reg;
@@ -657,7 +677,8 @@ pub const CodeGenerator = struct {
                 const ptr_ty = self.unit.node_to_type.get(node.data.two.a).?;
                 const offset_ty = self.unit.node_to_type.get(node.data.two.b).?;
 
-                const ptr_val = try self.genNodeExpr(node.data.two.a, null);
+                const pre_ptr_val = try self.genNodeExpr(node.data.two.a, null);
+                const ptr_val = try pre_ptr_val.getValue(self, ptr_ty, null, false, false);
                 const offset_val = try self.genNodeExpr(node.data.two.b, null);
                 const f_offset_val = try offset_val.getValue(self, offset_ty, null, true, false);
 
@@ -682,11 +703,18 @@ pub const CodeGenerator = struct {
                 const elem_layout = self.computeLayout(elem_ty);
                 switch (f_offset_val) {
                     .immediate => |val| {
-                        const out_reg = self.availableRegister().?;
-                        self.useRegister(out_reg);
-                        _ = try self.writeInst(formLoad(elem_ty, out_reg, ptr_val.register, @as(u32, @truncate(val)) * elem_layout.size));
+                        // const out_reg = self.availableRegister().?;
+                        // self.useRegister(out_reg);
+                        // _ = try self.writeInst(formLoad(elem_ty, out_reg, ptr_val.register, @as(u32, @truncate(val)) * elem_layout.size));
+                        //
+                        return .{
+                            .memory_offset = .{
+                                .register = ptr_val.register,
+                                .offset = @as(u32, @truncate(val)) * elem_layout.size,
+                            },
+                        };
 
-                        return .{ .register = out_reg };
+                        // return .{ .register = out_reg };
                     },
                     .register => |reg| {
                         const offset_reg = self.availableRegister().?;
@@ -729,7 +757,13 @@ pub const CodeGenerator = struct {
                                     },
                                 }));
 
-                                _ = try self.writeInst(formLoad(elem_ty, out_reg, offset_reg, 0));
+                                return .{
+                                    .memory_offset = .{
+                                        .register = offset_reg,
+                                        .offset = 0,
+                                    },
+                                };
+                                // _ = try self.writeInst(formLoad(elem_ty, out_reg, offset_reg, 0));
                             },
                             .memory_offset => |mo| {
                                 const ptr_reg = self.availableRegister().?;
@@ -746,7 +780,13 @@ pub const CodeGenerator = struct {
                                     },
                                 }));
 
-                                _ = try self.writeInst(formLoad(elem_ty, out_reg, offset_reg, 0));
+                                return .{
+                                    .memory_offset = .{
+                                        .register = offset_reg,
+                                        .offset = 0,
+                                    },
+                                };
+                                // _ = try self.writeInst(formLoad(elem_ty, out_reg, offset_reg, 0));
                             },
                             else => @panic("not supported"),
                         }
@@ -761,38 +801,26 @@ pub const CodeGenerator = struct {
                 const expr_nidx = try self.genNodeExpr(Node.absoluteIndex(nidx, node.data.four.c), to_type);
                 const expr_type = self.unit.node_to_type.get(Node.absoluteIndex(nidx, node.data.four.c)).?;
 
-                switch (expr_nidx) {
-                    .memory_offset => |mo| {
-                        const out_reg = self.availableRegister().?;
-                        self.useRegister(out_reg);
-                        try self.writeCastLoad(expr_type, to_type, out_reg, mo.register, mo.offset);
-                    },
-                    .register => |reg| {
-                        if (to_type.isIntegral() and expr_type.isIntegral()) {
-                            if (to_type.isSigned() and expr_type.rank() < to_type.rank() and to_type.rank() <= self.unit.interner.intTy(false, 0).rank()) {
-                                const imms: u6 = switch (to_type.kind) {
-                                    .char => 0b000111,
-                                    .short => 0b001111,
-                                    .int => 0b011111,
-                                    else => unreachable,
-                                };
-                                _ = try self.writeInst(dataProcImm(.bitfield, .{
-                                    .sfopcNimmrimmsRnRd = .{
-                                        .rd = reg,
-                                        .rn = reg,
-                                        .imms = imms,
-                                        .immr = 0,
-                                        .N = 1,
-                                        .opc = 0b00,
-                                        .sf = true,
-                                    },
-                                }));
-                            }
-                        }
-                        return .{ .register = reg };
-                    },
-                    else => @panic("todo"),
-                }
+                return expr_nidx.getValue(self, expr_type, to_type, false, false);
+
+                // const out_reg = switch (expr_nidx) {
+                //     .memory_offset => |mo| blk: {
+                //         const out_reg = self.availableRegister().?;
+                //         self.useRegister(out_reg);
+                //         try self.writeCastLoad(expr_type, to_type, out_reg, mo.register, mo.offset);
+                //         break :blk out_reg;
+                //     },
+                //     .register => |reg| blk: {
+                //         _ = try self.writeCast(expr_type, to_type, reg, reg);
+                //         break :blk reg;
+                //     },
+                //     else => @panic("todo"),
+                // };
+
+                // if (result_ty) |rty| {
+                //     _ = try self.writeCast(to_type, rty, out_reg, out_reg);
+                // }
+                // return .{ .register = out_reg };
             },
             else => std.log.warn("Skipping node {}", .{nidx}),
         }
@@ -965,6 +993,61 @@ pub const CodeGenerator = struct {
             },
             else => @panic("umm"),
         };
+    }
+
+    pub fn writeCast(self: *Self, ty: Type, result_ty: Type, in_reg: u5, out_reg: u5) !bool {
+        if (ty == result_ty) {
+            return false;
+        }
+
+        if (ty.isIntegral() and result_ty.isIntegral()) {
+            if (ty.isSigned() and result_ty.rank() > ty.rank()) {
+                const imms: u6 = switch (ty.kind) {
+                    .char => 0b000111,
+                    .short => 0b001111,
+                    .int => 0b011111,
+                    else => unreachable,
+                };
+
+                _ = try self.writeInst(dataProcImm(.bitfield, .{
+                    .sfopcNimmrimmsRnRd = .{
+                        .rd = out_reg,
+                        .rn = in_reg,
+                        .imms = imms,
+                        .immr = 0b000000,
+                        .N = if (ty.rank() > self.unit.interner.intTy(true, 0).rank()) 1 else 0,
+                        .opc = 0,
+                        .sf = ty.rank() > self.unit.interner.intTy(true, 0).rank(),
+                    },
+                }));
+
+                return true;
+            } else if (result_ty.rank() != ty.rank()) {
+                const imms: u6 = switch (ty.kind) {
+                    .char => 0b000111,
+                    .short => 0b001111,
+                    else => unreachable,
+                };
+                _ = try self.writeInst(dataProcImm(.logical, .{
+                    .sfopcNimmrimmsRnRd = .{
+                        .rd = out_reg,
+                        .rn = in_reg,
+                        .imms = imms,
+                        .immr = 0,
+                        .N = 1,
+                        .opc = 0b00,
+                        .sf = true,
+                    },
+                }));
+
+                return true;
+            } else {
+                @panic("todo: do we need more cases??");
+            }
+
+            return false;
+        }
+        unreachable;
     }
 
     pub fn writeCastLoad(self: *Self, ty: Type, result_ty: Type, out_reg: u5, offset_reg: u5, offset: u32) !void {
@@ -1199,6 +1282,7 @@ pub const CodeGenerator = struct {
 
     pub fn dataProcImm(op: enum(u32) {
         add_sub = 0x01000000,
+        logical = 0x02000000,
         move = 0x02800000,
         bitfield = 0x03000000,
     }, data: OPS) u32 {
