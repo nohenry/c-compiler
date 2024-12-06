@@ -728,12 +728,12 @@ pub const Node = extern struct {
             },
             .enum_member => {
                 const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
-                try writer.print("\x1b[1;35mMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+                try writer.print("\x1b[1;35mEnumMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
             },
             .enum_member_value => {
                 const ident_index: TokenIndex = @bitCast(self.data.as(.two).a);
                 const value_index = self.data.as(.two).b;
-                try writer.print("\x1b[1;35mMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
+                try writer.print("\x1b[1;35mEnumMember\x1b[0m \x1b[1;36m'{s}'\x1b[0m", .{unit.identifierAt(ident_index)});
 
                 result = .{ .node = value_index };
             },
@@ -1095,6 +1095,7 @@ pub const Node = extern struct {
                 try writer.print("\x1b[0m", .{});
             }
         }
+        try writer.print(" ({})", .{index});
         try writer.writeByte('\n');
 
         switch (result) {

@@ -1,23 +1,18 @@
 
-int foobar(int, int, ...);
+// #define __QOS_ENUM(name) typedef name foo;
 
-// long hello(char c) {
-//     return (short)c;
-// }
+// __QOS_ENUM(foobar);
+// #define __QOS_ENUM(name) typedef name  foo
+// #define F(...) __VA_ARG__
+enum { a = 4, f = 3 };
 
-long foo(signed int f) {
-    return (unsigned char)f;
-}
+#define a1(y) (y+2)
+#define a2(y) a1(y)+1
+#define f a+f
 
-long foo1(char f) {
-    return f;
-}
+int i;
 
-long foo2(signed char f) {
-    long s = (signed int)f;
-    return (unsigned short)s;
-}
-
-int main(int argc, char **argv) {
-    return (argv[0][0]);
+int main() {
+    i = 234;
+    return i;
 }

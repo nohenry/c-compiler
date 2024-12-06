@@ -45,6 +45,12 @@ pub const TypeKind = struct {
             nidx: NodeIndex,
             variants: Type,
         },
+        unnamed_enum: struct {
+            nidx: NodeIndex,
+        },
+        @"enum": struct {
+            nidx: NodeIndex,
+        },
 
         field: struct {
             name: StringInterner.Index,
@@ -423,6 +429,22 @@ pub const TypeInterner = struct {
         }, qualifiers);
     }
 
+    pub fn enumTy(self: *Self, nidx: NodeIndex, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{
+            .@"enum" = .{
+                .nidx = nidx,
+            },
+        }, qualifiers);
+    }
+
+    pub fn unnamedEnumTy(self: *Self, nidx: NodeIndex, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{
+            .unnamed_enum = .{
+                .nidx = nidx,
+            },
+        }, qualifiers);
+    }
+
     pub fn multiTy(self: *Self, types: []const Type) Type {
         const ty = self.type_map.get(.{
             .kind = .{ .multi_type = types },
@@ -586,12 +608,20 @@ pub const TypeInterner = struct {
                 try writer.print("}}", .{});
             },
             .@"union" => |uni| {
-                try writer.print("union", .{});
+                try writer.print("union ", .{});
                 const tok_index = self.unit.nodes.items[uni.nidx].data.two.a;
                 try writer.writeAll(self.unit.identifierAt(@bitCast(tok_index)));
                 try writer.print(" {{ ", .{});
                 try self.printTyWriter(uni.variants, true, writer);
                 try writer.print("}}", .{});
+            },
+            .unnamed_enum => |enu| {
+                try writer.print("enum ({})", .{enu.nidx});
+            },
+            .@"enum" => |enu| {
+                try writer.print("enum ", .{});
+                const tok_index = self.unit.nodes.items[enu.nidx].data.two.a;
+                try writer.writeAll(self.unit.identifierAt(@bitCast(tok_index)));
             },
 
             .field => |fld| {

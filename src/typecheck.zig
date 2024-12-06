@@ -800,7 +800,16 @@ pub const TypeChecker = struct {
 
                 return self.unit.interner.voidTy();
             },
-            .@"struct", .struct_ident, .struct_forward => {
+            .@"struct",
+            .struct_ident,
+            .struct_forward,
+            .@"union",
+            .union_ident,
+            .union_forward,
+            .@"enum",
+            .enum_ident,
+            .enum_forward,
+            => {
                 _ = try self.checkNodeType(nidx);
 
                 return self.unit.interner.voidTy();
@@ -1056,6 +1065,73 @@ pub const TypeChecker = struct {
 
                 break :blk result_ty;
             },
+            .@"enum" => blk: {
+                var index = node.data.two.a;
+                const end_index = index + node.data.two.b;
+
+                var index_value: u64 = 0;
+                while (index < end_index) : (index += 1) {
+                    const member_index = self.unit.node_ranges.items[index];
+                    const member = &self.unit.nodes.items[member_index];
+                    switch (member.kind) {
+                        .enum_member => {
+                            const ident_str = self.unit.identifierAt(@bitCast(member.data.two.a));
+                            self.unit.enum_constants.put(ident_str, index_value) catch @panic("OOM");
+                        },
+                        .enum_member_value => {
+                            const ident_str = self.unit.identifierAt(@bitCast(member.data.two.a));
+                            var eval = SimpleEvaluator.init(self.unit);
+                            const this_index_value = try eval.evalNode(member.data.two.b);
+                            self.unit.enum_constants.put(ident_str, this_index_value.int_value) catch @panic("OOM");
+                            index_value = this_index_value.int_value;
+                        },
+                        else => @panic("compiler bug"),
+                    }
+
+                    index_value += 1;
+                }
+
+                const result_ty = self.unit.interner.unnamedEnumTy(nidx, 0);
+                try self.unit.declared_type.put(nidx, result_ty);
+
+                break :blk result_ty;
+            },
+            .enum_ident => blk: {
+                std.debug.assert(self.unit.nodes.items[nidx - 1].kind == .range);
+                const member_range = self.unit.nodes.items[nidx - 1].data;
+                var index = member_range.two.a;
+                const end_index = index + member_range.two.b;
+
+                var index_value: u64 = 0;
+                while (index < end_index) : (index += 1) {
+                    const member_index = self.unit.node_ranges.items[index];
+                    const member = &self.unit.nodes.items[member_index];
+                    switch (member.kind) {
+                        .enum_member => {
+                            const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
+                            self.unit.enum_constants.put(ident_str, index_value) catch @panic("OOM");
+                        },
+                        .enum_member_value => {
+                            const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
+                            var eval = SimpleEvaluator.init(self.unit);
+                            const this_index_value = try eval.evalNode(node.data.two.b);
+                            self.unit.enum_constants.put(ident_str, this_index_value.int_value) catch @panic("OOM");
+                            index_value = this_index_value.int_value;
+                        },
+                        else => @panic("compiler bug"),
+                    }
+
+                    index_value += 1;
+                }
+
+                const result_ty = self.unit.interner.enumTy(nidx, 0);
+
+                try self.unit.declared_type.put(nidx, result_ty);
+                const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
+                self.unit.symbol_table.putTypeSymbol(ident_str, .{ .nidx = nidx });
+
+                break :blk result_ty;
+            },
             .struct_forward => {
                 const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
                 const sym = self.unit.symbol_table.searchTypeSymbol(ident_str) orelse {
@@ -1074,6 +1150,16 @@ pub const TypeChecker = struct {
                 try self.unit.node_to_node.put(nidx, sym.nidx);
                 return self.unit.declared_type.get(sym.nidx).?;
             },
+            .enum_forward => {
+                const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
+                const sym = self.unit.symbol_table.searchTypeSymbol(ident_str) orelse {
+                    std.debug.panic("Union \x1b[1m'{s}'\x1b[0m is not defined", .{ident_str});
+                };
+
+                try self.unit.node_to_node.put(nidx, sym.nidx);
+                return self.unit.declared_type.get(sym.nidx).?;
+            },
+
             else => {
                 std.log.warn("Skipping node {}", .{nidx});
                 return self.unit.interner.voidTy();
@@ -1210,6 +1296,12 @@ pub const TypeChecker = struct {
 
 pub const ConstValue = union(enum) {
     int_value: u64,
+
+    pub fn boolValue(self: @This()) bool {
+        return switch (self) {
+            .int_value => |i| i > 0,
+        };
+    }
 };
 
 pub const SimpleEvaluator = struct {
@@ -1220,6 +1312,11 @@ pub const SimpleEvaluator = struct {
         return .{
             .unit = unit,
         };
+    }
+
+    pub fn commonValue(self: *Self, left: ConstValue, right: ConstValue) struct { ConstValue, ConstValue } {
+        _ = self;
+        return .{ left, right };
     }
 
     pub fn evalNode(self: *Self, nidx: NodeIndex) !ConstValue {
@@ -1233,6 +1330,70 @@ pub const SimpleEvaluator = struct {
             .unsigned_long_long_literal => return .{ .int_value = node.data.long },
             .size_literal => return .{ .int_value = node.data.long },
             .unsigned_size_literal => return .{ .int_value = node.data.long },
+            .identifier => {
+                const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
+                if (self.unit.enum_constants.get(ident_str)) |cv| {
+                    return .{ .int_value = cv };
+                }
+
+                std.debug.panic("Invalid constant value {}", .{nidx});
+            },
+
+            .if_statement_else => {
+                const condition = try self.evalNode(node.data.two.a);
+                if (condition.boolValue()) {
+                    return try self.evalNode(Node.absoluteIndex(nidx, node.data.four.c));
+                } else {
+                    return try self.evalNode(Node.absoluteIndex(nidx, node.data.four.d));
+                }
+            },
+
+            .binary_lr_operator => {
+                const op: TokenKind = @enumFromInt(node.data.four.d);
+                const left = try self.evalNode(node.data.two.a);
+                switch (op) {
+                    .plus,
+                    .minus,
+                    .star,
+                    .slash,
+                    .percent,
+                    .ampersand,
+                    .pipe,
+                    .carot,
+                    .bit_left_shift,
+                    .bit_right_shift,
+                    .equality,
+                    .nequality,
+                    => {
+                        const right = try self.evalNode(node.data.two.a);
+                        const lval, const rval = self.commonValue(left, right);
+                        const result: ConstValue = switch (lval) {
+                            .int_value => .{
+                                .int_value = switch (op) {
+                                    .plus => lval.int_value + rval.int_value,
+                                    .minus => lval.int_value - rval.int_value,
+                                    .star => lval.int_value * rval.int_value,
+                                    .slash => lval.int_value / rval.int_value,
+                                    .percent => lval.int_value % rval.int_value,
+                                    .ampersand => lval.int_value & rval.int_value,
+                                    .pipe => lval.int_value | rval.int_value,
+                                    .carot => lval.int_value ^ rval.int_value,
+                                    .bit_left_shift => @shlWithOverflow(lval.int_value, @as(u6, @intCast(rval.int_value)))[0],
+                                    .bit_right_shift => @shrExact(lval.int_value, @as(u6, @intCast(rval.int_value))),
+                                    .equality => if (lval.int_value == rval.int_value) 1 else 0,
+                                    .nequality => if (lval.int_value != rval.int_value) 1 else 0,
+                                    else => @panic("invalid operator"),
+                                },
+                            },
+                        };
+
+                        return result;
+                    },
+                    else => {
+                        std.debug.panic("Invalid operator for constant value {}", .{nidx});
+                    },
+                }
+            },
             else => std.debug.panic("Invalid constant value {}", .{nidx}),
         }
     }

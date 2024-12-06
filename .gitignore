@@ -3,3 +3,5 @@ zig-out
 main
 a.out
 testsuite
+*.exe
+*.o

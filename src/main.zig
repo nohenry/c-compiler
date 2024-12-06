@@ -41,10 +41,14 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var argv = std.process.args();
     var source_file: ?[]const u8 = null;
+    var output_file: ?[]const u8 = null;
 
     var defines = std.ArrayList([]const u8).init(gpa.allocator());
     var include_paths = std.ArrayList([]const u8).init(gpa.allocator());
     _ = argv.next(); // program name
+    var next_arg_mode: enum { source_file, output_file } = .source_file;
+    var link = true;
+    var expand = false;
     while (argv.next()) |arg| {
         switch (arg[0]) {
             '-' => {
@@ -55,6 +59,13 @@ pub fn main() !void {
                     'I' => {
                         try include_paths.append(arg[2..]);
                     },
+                    'o' => {
+                        next_arg_mode = .output_file;
+                    },
+                    'E' => {
+                        expand = true;
+                    },
+                    'c' => link = false,
                     'O' => {},
                     'v' => {
                         const version =
@@ -64,13 +75,18 @@ pub fn main() !void {
                             \\InstalledDir: /Users/oliverclarke/Documents/dev/cp/zig-out/bin
                         ;
                         std.debug.print("{s}\n", .{version});
-                        return;
+                       return;
                     },
                     else => std.log.warn("Unused argument {s}", .{arg}),
                 }
             },
             else => {
-                source_file = arg;
+                switch (next_arg_mode) {
+                    .source_file => source_file = arg,
+                    .output_file => output_file = arg,
+                }
+
+                next_arg_mode = .source_file;
             },
         }
     }
@@ -82,6 +98,7 @@ pub fn main() !void {
     std.log.debug("File: {s}", .{source_file.?});
 
     const source = try std.fs.cwd().readFileAlloc(gpa.allocator(), source_file.?, std.math.maxInt(usize));
+    std.debug.print("{s}\n", .{source});
 
     const full_path = try std.fs.realpathAlloc(gpa.allocator(), ".");
     const absolute_path = try std.fs.path.resolve(gpa.allocator(), &.{
@@ -558,9 +575,9 @@ pub fn main() !void {
     const cfg_file_index = unit.addFile(absolute_path, cfg_source_buffer.items);
 
     const root_file = unit.addFile(absolute_path, source);
-    for (defines.items) |def| {
-        unit.define(def);
-    }
+    // for (defines.items) |def| {
+    //     unit.define(def);
+    // }
     for (include_paths.items) |path| {
         if (std.fs.path.isAbsolute(path)) {
             try unit.include_dirs.append(path);
@@ -572,7 +589,7 @@ pub fn main() !void {
     _ = tokenizer.initFile(root_file);
     _ = tokenizer.initFile(cfg_file_index);
 
-    if (false) {
+    if (expand) {
         var preprocessed_buffer = std.ArrayList(u8).init(gpa.allocator());
         var preprocessed_writer = preprocessed_buffer.writer();
 
@@ -616,7 +633,15 @@ pub fn main() !void {
         _ = try codegen.genNode(node_index);
     }
 
-    try codegen.writeToFile("main");
+    if (link) {
+        try codegen.writeToFile("tmp.o");
+        var clang_child = std.process.Child.init(&.{ "/opt/homebrew/opt/llvm/bin/clang", "tmp.o", "-o", output_file orelse "a.out" }, gpa.allocator());
+        clang_child.stdout_behavior = .Pipe;
+        const term = try clang_child.spawnAndWait();
+        _ = term;
+    } else {
+        try codegen.writeToFile(output_file orelse "a.out");
+    }
 
     // builder.write
 

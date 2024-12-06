@@ -2,14 +2,20 @@ const std = @import("std");
 const Unit = @import("unit.zig").Unit;
 const NodeIndex = @import("parser.zig").NodeIndex;
 const Node = @import("parser.zig").Node;
+const SimpleEvaluator = @import("typecheck.zig").SimpleEvaluator;
 const TokenKind = @import("tokenizer.zig").TokenKind;
 const Type = @import("types.zig").Type;
 
 const Symbol = struct {
-    value: []const u8,
-    prefix: bool = true,
     address: u32,
+    section: u32,
+    prefix: bool = true,
     ty: MachoSymbolType,
+};
+
+const MemoryOffset = struct {
+    offset: u32,
+    register: u5,
 };
 
 const Value = union(enum) {
@@ -17,13 +23,12 @@ const Value = union(enum) {
     immediate: u64,
     register: u5,
     memory: u32,
-    memory_offset: struct {
-        offset: u32,
-        register: u5,
-    },
+    reloc_offset: MemoryOffset,
+    memory_offset: MemoryOffset,
 
     pub fn getValue(self: @This(), cg: *CodeGenerator, ty: Type, result_ty: ?Type, imm: bool, mem: bool) !Value {
-        switch (self) {
+        var s = self;
+        switch (s) {
             .immediate => |x| {
                 if (imm) {
                     return self;
@@ -46,7 +51,18 @@ const Value = union(enum) {
 
                 @panic("shouldbnt be here");
             },
-            .memory_offset => |mo| {
+            .memory_offset, .reloc_offset => |*mo| {
+                if (self == .reloc_offset) {
+                    try cg.reloc_buffer.append(std.macho.relocation_info{
+                        .r_symbolnum = @truncate(mo.offset),
+                        .r_address = @intCast(cg.builder.currentOffsetInSection(cg.segment_offset, 0)),
+                        .r_extern = 1,
+                        .r_length = 2,
+                        .r_pcrel = 0,
+                        .r_type = @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGEOFF12),
+                    });
+                    mo.offset = 0;
+                }
                 if (cg.availableRegister()) |reg| {
                     if (result_ty) |rty| {
                         _ = try cg.writeCastLoad(ty, rty, reg, mo.register, mo.offset);
@@ -109,7 +125,11 @@ pub const CodeGenerator = struct {
     text_section_descriptor_offset: u32,
     inst_count: u32 = 0,
 
-    symbols: std.MultiArrayList(Symbol),
+    data_section_buffer: std.ArrayList(u8),
+    common_section_buffer: std.ArrayList(u8),
+    reloc_buffer: std.ArrayList(std.macho.relocation_info),
+
+    symbols: std.StringArrayHashMap(Symbol),
     structs: std.AutoHashMap(NodeIndex, StructLayout),
     expects_reg: ?u5 = null,
 
@@ -122,23 +142,55 @@ pub const CodeGenerator = struct {
     pub fn init(unit: *Unit) !Self {
         var builder = try MachoBuilder.init(unit.allocator);
 
-        const load_segment = try builder.addLoadSegment(1);
+        const load_segment = try builder.addLoadSegment(3);
         const symtab_segment = try builder.addLoadSymTab();
-        const section = builder.ptrToSection(load_segment, 0);
-        @memset(&section.sectname, 0);
-        @memset(&section.segname, 0);
-        @memcpy(section.sectname[0.."__text".len], "__text");
-        @memcpy(section.segname[0.."__TEXT".len], "__TEXT");
+        const text_section = builder.ptrToSection(load_segment, 0);
+        @memset(&text_section.sectname, 0);
+        @memset(&text_section.segname, 0);
+        @memcpy(text_section.sectname[0.."__text".len], "__text");
+        @memcpy(text_section.segname[0.."__TEXT".len], "__TEXT");
 
-        section.addr = 0;
-        section.size = 5;
-        section.@"align" = 2;
-        section.reloff = 0;
-        section.nreloc = 0;
-        section.flags = std.macho.S_REGULAR | std.macho.S_ATTR_PURE_INSTRUCTIONS | std.macho.S_ATTR_SOME_INSTRUCTIONS;
-        section.reserved1 = 0;
-        section.reserved2 = 0;
-        section.reserved3 = 0;
+        text_section.addr = 0;
+        text_section.size = 0;
+        text_section.@"align" = 2;
+        text_section.reloff = 0;
+        text_section.nreloc = 0;
+        text_section.flags = std.macho.S_REGULAR | std.macho.S_ATTR_PURE_INSTRUCTIONS | std.macho.S_ATTR_SOME_INSTRUCTIONS;
+        text_section.reserved1 = 0;
+        text_section.reserved2 = 0;
+        text_section.reserved3 = 0;
+
+        const data_section = builder.ptrToSection(load_segment, 1);
+        @memset(&data_section.sectname, 0);
+        @memset(&data_section.segname, 0);
+        @memcpy(data_section.sectname[0.."__data".len], "__data");
+        @memcpy(data_section.segname[0.."__DATA".len], "__DATA");
+
+        data_section.addr = 0;
+        data_section.size = 0;
+        data_section.@"align" = 2;
+        data_section.reloff = 0;
+        data_section.nreloc = 0;
+        data_section.flags = std.macho.S_REGULAR;
+        data_section.reserved1 = 0;
+        data_section.reserved2 = 0;
+        data_section.reserved3 = 0;
+
+        const common_section = builder.ptrToSection(load_segment, 2);
+        @memset(&common_section.sectname, 0);
+        @memset(&common_section.segname, 0);
+        @memcpy(common_section.sectname[0.."__common".len], "__common");
+        @memcpy(common_section.segname[0.."__DATA".len], "__DATA");
+
+        common_section.addr = 0;
+        common_section.size = 0;
+        common_section.@"align" = 2;
+        common_section.reloff = 0;
+        common_section.nreloc = 0;
+        common_section.flags = std.macho.S_REGULAR;
+        common_section.reserved1 = 0;
+        common_section.reserved2 = 0;
+        common_section.reserved3 = 0;
 
         // const offset = try builder.writeSlice(&[_]u8{1, 2, 3, 4, 5});
         // section.offset = offset;
@@ -150,7 +202,7 @@ pub const CodeGenerator = struct {
         // _ = try builder.writeSymbolEntry(symtab_segment, 0x6969, .{});
         const text_section_data = builder.currentOffset();
         builder.ptrTo(std.macho.segment_command_64, load_segment).fileoff = text_section_data;
-        section.offset = text_section_data;
+        text_section.offset = text_section_data;
         try builder.alignForward(@alignOf(u32));
 
         return .{
@@ -158,12 +210,15 @@ pub const CodeGenerator = struct {
             .unit = unit,
             .builder = builder,
 
+            .data_section_buffer = .init(unit.allocator),
+            .common_section_buffer = .init(unit.allocator),
+            .reloc_buffer = .init(unit.allocator),
             .structs = .init(unit.allocator),
             .segment_offset = load_segment,
             .symtab_offset = symtab_segment,
             .text_section_descriptor_offset = 0,
 
-            .symbols = .{},
+            .symbols = .init(unit.allocator),
         };
     }
 
@@ -222,27 +277,74 @@ pub const CodeGenerator = struct {
                 const decl_ty = self.unit.declared_type.get(nidx).?;
                 const layout = self.computeLayout(decl_ty);
 
-                self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
-                const offset = self.fctx.?.next_offset;
-                self.fctx.?.next_offset += layout.max();
-                try self.fctx.?.local_offsets.put(nidx, offset);
-                std.log.info("Var layout: {}", .{layout});
-
                 const init_index = Node.absoluteIndex(nidx, node.data.as(.four).d);
-                const init_value = try self.genNodeExpr(init_index, decl_ty);
-                const value = try init_value.getValue(self, decl_ty, decl_ty, false, false);
+                if (self.fctx == null) {
+                    var eval = SimpleEvaluator.init(self.unit);
+                    const init_value = try eval.evalNode(init_index);
+                    const offset = self.data_section_buffer.items.len;
 
-                _ = try self.writeInst(formStore(decl_ty, value.register, SP, offset));
+                    const aligned_slice = try self.data_section_buffer.addManyAsSlice(layout.max());
+                    const size_slice = aligned_slice[0..layout.size];
+
+                    if (decl_ty.isIntegral()) {
+                        if (layout.size >= @sizeOf(u64)) {
+                            std.mem.writeInt(u64, @ptrCast(size_slice.ptr), init_value.int_value, .little);
+                        } else if (layout.size >= @sizeOf(u32)) {
+                            std.mem.writeInt(u32, @ptrCast(size_slice.ptr), @intCast(init_value.int_value), .little);
+                        } else if (layout.size >= @sizeOf(u16)) {
+                            std.mem.writeInt(u16, @ptrCast(size_slice.ptr), @intCast(init_value.int_value), .little);
+                        } else if (layout.size >= @sizeOf(u8)) {
+                            std.mem.writeInt(u8, @ptrCast(size_slice.ptr), @intCast(init_value.int_value), .little);
+                        }
+                    }
+
+                    const ident_index = node.data.two.a;
+                    try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
+                        // .address = undefined,
+                        // .address = self.builder.currentOffsetInSection(self.segment_offset, 1),
+                        .address = @truncate(offset),
+                        .section = 1,
+                        .ty = MachoSymbolType{
+                            .external = true,
+                            .ty = .section,
+                        },
+                    });
+                } else {
+                    self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
+                    const offset = self.fctx.?.next_offset;
+                    self.fctx.?.next_offset += layout.max();
+                    try self.fctx.?.local_offsets.put(nidx, offset);
+
+                    const init_value = try self.genNodeExpr(init_index, decl_ty);
+                    const value = try init_value.getValue(self, decl_ty, decl_ty, false, false);
+
+                    _ = try self.writeInst(formStore(decl_ty, value.register, SP, offset));
+                }
             },
             .var_declaration => {
                 const decl_ty = self.unit.declared_type.get(nidx).?;
                 const layout = self.computeLayout(decl_ty);
 
-                self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
-                const offset = self.fctx.?.next_offset;
-                self.fctx.?.next_offset += layout.max();
-                try self.fctx.?.local_offsets.put(nidx, offset);
-                std.log.info("Var layout: {}", .{layout});
+                if (self.fctx == null) {
+                    const offset = self.common_section_buffer.items.len;
+                    _ = try self.common_section_buffer.addManyAsSlice(layout.max());
+
+                    const ident_index = node.data.two.a;
+                    try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
+                        // .address = undefined,
+                        .address = @truncate(offset),
+                        .section = 2,
+                        .ty = MachoSymbolType{
+                            .external = true,
+                            .ty = .section,
+                        },
+                    });
+                } else {
+                    self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
+                    const offset = self.fctx.?.next_offset;
+                    self.fctx.?.next_offset += layout.max();
+                    try self.fctx.?.local_offsets.put(nidx, offset);
+                }
             },
             .return_statement => {
                 _ = try self.writeInst(brExcSys(.un_cond_br_reg, .{
@@ -295,9 +397,9 @@ pub const CodeGenerator = struct {
             },
             .function_declaration_body => {
                 const ident_index = node.data.as(.two).a;
-                try self.symbols.append(self.unit.allocator, Symbol{
-                    .value = self.unit.identifierAt(@bitCast(ident_index)),
+                try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
                     .address = self.inst_count * 4,
+                    .section = 0,
                     .ty = MachoSymbolType{
                         .external = true,
                         .ty = .section,
@@ -389,14 +491,30 @@ pub const CodeGenerator = struct {
 
                 const stack_frame_size = std.mem.alignForward(u32, self.fctx.?.next_offset, 16);
                 if (stack_frame_size == 0) {
-                    // repurpose this for ret
-                    _ = try self.writeInstAt(brExcSys(.un_cond_br_reg, .{
-                        .opcop23Rnop4 = .{
-                            .rn = LR,
-                            .op3 = 0,
-                            .opc = 0b10,
-                        },
-                    }), sub_sp_index);
+                    if (self.builder.currentOffset() == sub_sp_index + 4) {
+                        // repurpose this for ret
+                        _ = try self.writeInstAt(brExcSys(.un_cond_br_reg, .{
+                            .opcop23Rnop4 = .{
+                                .rn = LR,
+                                .op3 = 0,
+                                .opc = 0b10,
+                            },
+                        }), sub_sp_index);
+                    } else {
+                        _ = try self.writeInstAt(brExcSys(.hints, .{
+                            .crmop2 = .{
+                                .op2 = 0,
+                                .crm = 0,
+                            },
+                        }), sub_sp_index);
+                        _ = try self.writeInst(brExcSys(.un_cond_br_reg, .{
+                            .opcop23Rnop4 = .{
+                                .rn = LR,
+                                .op3 = 0,
+                                .opc = 0b10,
+                            },
+                        }));
+                    }
                 } else {
                     _ = try self.writeInstAt(dataProcImm(.add_sub, .{
                         .sfopSshimm12rnrd = .{
@@ -503,11 +621,39 @@ pub const CodeGenerator = struct {
                 // self.useRegister(out_reg);
 
                 const referred_nidx = self.unit.node_to_node.get(nidx).?;
+                const str = self.unit.identifierAt(@bitCast(node.data.two.a));
+
                 if (self.fctx.?.local_offsets.get(referred_nidx)) |vr| {
                     return .{
                         .memory_offset = .{
                             .offset = vr,
                             .register = SP,
+                        },
+                    };
+                } else if (self.symbols.getIndex(str)) |sym| {
+                    try self.reloc_buffer.append(std.macho.relocation_info{
+                        .r_symbolnum = @truncate(sym),
+                        .r_address = @intCast(self.builder.currentOffsetInSection(self.segment_offset, 0)),
+                        .r_extern = 1,
+                        .r_length = 2,
+                        .r_pcrel = 1,
+                        .r_type = @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGE21),
+                    });
+                    const out_reg = self.availableRegister().?;
+                    self.useRegister(out_reg);
+                    // const addr: u31 =
+                    _ = try self.writeInst(dataProcImm(.pc_rel, .{
+                        .opimmloimmhird = .{
+                            .rd = out_reg,
+                            .immlo = 0,
+                            .immhi = 0,
+                            .op = 1,
+                        },
+                    }));
+                    return .{
+                        .reloc_offset = .{
+                            .offset = @truncate(sym),
+                            .register = out_reg,
                         },
                     };
                 }
@@ -532,7 +678,7 @@ pub const CodeGenerator = struct {
                     .dot => {
                         const ltype = self.unit.node_to_type.get(node.data.two.a).?;
                         _ = self.computeLayout(ltype);
-                        const lvalue = try self.genNodeLvalue(node.data.two.a);
+                        const lvalue = try self.genNodeExpr(node.data.two.a, null);
                         // const refed_node = self.unit.node_to_node.get(Node.absoluteIndex(nidx, node.data.four.c)).?;
 
                         const right_node = &self.unit.nodes.items[Node.absoluteIndex(nidx, node.data.four.c)];
@@ -574,12 +720,24 @@ pub const CodeGenerator = struct {
                     },
                     .assignment => {
                         const rvalue = try self.genNode(Node.absoluteIndex(nidx, node.data.as(.four).c));
-                        const lvalue = try self.genNodeLvalue(node.data.as(.two).a);
+                        var lvalue = try self.genNodeExpr(node.data.as(.two).a, null);
                         switch (lvalue) {
-                            .memory_offset => |mo| {
+                            .memory_offset, .reloc_offset => |*mo| {
                                 const ty = self.unit.node_to_type.get(node.data.two.a).?;
                                 const rrvalue = try rvalue.getValue(self, ty, null, false, false);
-                                std.log.info("Assign {} {} {}", .{ mo, mo.offset / 4, rvalue });
+
+                                if (lvalue == .reloc_offset) {
+                                    try self.reloc_buffer.append(std.macho.relocation_info{
+                                        .r_symbolnum = @truncate(mo.offset),
+                                        .r_address = @intCast(self.builder.currentOffsetInSection(self.segment_offset, 0)),
+                                        .r_extern = 1,
+                                        .r_length = 2,
+                                        .r_pcrel = 0,
+                                        .r_type = @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGEOFF12),
+                                    });
+                                    mo.offset = 0;
+                                }
+
                                 if (ty.isIntegral()) {
                                     _ = try self.writeInst(formStore(ty, rrvalue.register, mo.register, mo.offset));
                                 } else {
@@ -828,75 +986,91 @@ pub const CodeGenerator = struct {
         return .{ .inst = 0 };
     }
 
-    pub fn genNodeLvalue(self: *Self, nidx: NodeIndex) !Value {
-        const node = &self.unit.nodes.items[nidx];
-        switch (node.kind) {
-            .identifier => {
-                const referred_nidx = self.unit.node_to_node.get(nidx).?;
-                if (self.fctx.?.local_offsets.get(referred_nidx)) |vr| {
-                    return .{
-                        .memory_offset = .{
-                            .offset = vr,
-                            .register = SP,
-                        },
-                    };
-                }
+    // pub fn genNodeLvalue(self: *Self, nidx: NodeIndex) !Value {
+    //     const node = &self.unit.nodes.items[nidx];
+    //     switch (node.kind) {
+    //         .identifier => {
+    //             const referred_nidx = self.unit.node_to_node.get(nidx).?;
+    //             const str = self.unit.identifierAt(@bitCast(node.data.two.a));
+    //             if (self.fctx.?.local_offsets.get(referred_nidx)) |vr| {
+    //                 return .{
+    //                     .memory_offset = .{
+    //                         .offset = vr,
+    //                         .register = SP,
+    //                     },
+    //                 };
+    //             } else if (self.symbols.getIndex(str)) |sym| {
+    //                 try self.reloc_buffer.append(std.macho.relocation_info{
+    //                     .r_symbolnum = @truncate(sym),
+    //                     .r_address = @intCast(self.builder.currentOffsetInSection(self.segment_offset, 0)),
+    //                     .r_extern = 1,
+    //                     .r_length = 2,
+    //                     .r_pcrel = 0,
+    //                     .r_type = @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGE21),
+    //                 });
+    //                 return .{
+    //                     .memory_offset = .{
+    //                         .offset = 0,
+    //                         .register = 0,
+    //                     },
+    //                 };
+    //             }
 
-                @panic("unhandled lvalue");
-            },
-            .binary_lr_operator => {
-                const old_expects_reg = self.expects_reg;
-                defer self.expects_reg = old_expects_reg;
-                self.expects_reg = null;
+    //             @panic("unhandled lvalue");
+    //         },
+    //         .binary_lr_operator => {
+    //             const old_expects_reg = self.expects_reg;
+    //             defer self.expects_reg = old_expects_reg;
+    //             self.expects_reg = null;
 
-                const op: TokenKind = @enumFromInt(node.data.as(.four).d);
-                switch (op) {
-                    .dot => {
-                        const ltype = self.unit.node_to_type.get(node.data.two.a).?;
-                        _ = self.computeLayout(ltype);
-                        const lvalue = try self.genNodeLvalue(node.data.two.a);
-                        // const refed_node = self.unit.node_to_node.get(Node.absoluteIndex(nidx, node.data.four.c)).?;
+    //             const op: TokenKind = @enumFromInt(node.data.as(.four).d);
+    //             switch (op) {
+    //                 .dot => {
+    //                     const ltype = self.unit.node_to_type.get(node.data.two.a).?;
+    //                     _ = self.computeLayout(ltype);
+    //                     const lvalue = try self.genNodeLvalue(node.data.two.a);
+    //                     // const refed_node = self.unit.node_to_node.get(Node.absoluteIndex(nidx, node.data.four.c)).?;
 
-                        const right_node = &self.unit.nodes.items[Node.absoluteIndex(nidx, node.data.four.c)];
-                        const field_str = self.unit.identifierAt(@bitCast(right_node.data.two.a));
+    //                     const right_node = &self.unit.nodes.items[Node.absoluteIndex(nidx, node.data.four.c)];
+    //                     const field_str = self.unit.identifierAt(@bitCast(right_node.data.two.a));
 
-                        const strc_nidx = ltype.getStructureIndex();
-                        const field_offset = switch (ltype.kind) {
-                            .@"struct", .unnamed_struct => blk2: {
-                                const field_map = self.unit.field_map.getPtr(strc_nidx).?;
-                                const field_index = field_map.get(field_str).?;
-                                const strct = self.structs.getPtr(strc_nidx).?;
-                                const field_offset = strct.offsets.get(field_index).?;
+    //                     const strc_nidx = ltype.getStructureIndex();
+    //                     const field_offset = switch (ltype.kind) {
+    //                         .@"struct", .unnamed_struct => blk2: {
+    //                             const field_map = self.unit.field_map.getPtr(strc_nidx).?;
+    //                             const field_index = field_map.get(field_str).?;
+    //                             const strct = self.structs.getPtr(strc_nidx).?;
+    //                             const field_offset = strct.offsets.get(field_index).?;
 
-                                break :blk2 field_offset;
-                            },
-                            .@"union", .unnamed_union => blk2: {
-                                break :blk2 0;
-                            },
-                            else => unreachable,
-                        };
+    //                             break :blk2 field_offset;
+    //                         },
+    //                         .@"union", .unnamed_union => blk2: {
+    //                             break :blk2 0;
+    //                         },
+    //                         else => unreachable,
+    //                     };
 
-                        switch (lvalue) {
-                            .memory_offset => |mo| {
-                                return .{
-                                    .memory_offset = .{
-                                        .offset = mo.offset + field_offset,
-                                        .register = mo.register,
-                                    },
-                                };
-                            },
-                            else => @panic(""),
-                        }
-                    },
-                    else => {},
-                }
-                const rvalue = try self.genNode(Node.absoluteIndex(nidx, node.data.as(.four).c));
-                _ = rvalue;
-                @panic("foo");
-            },
-            else => @panic("unhandled node"),
-        }
-    }
+    //                     switch (lvalue) {
+    //                         .memory_offset => |mo| {
+    //                             return .{
+    //                                 .memory_offset = .{
+    //                                     .offset = mo.offset + field_offset,
+    //                                     .register = mo.register,
+    //                                 },
+    //                             };
+    //                         },
+    //                         else => @panic(""),
+    //                     }
+    //                 },
+    //                 else => {},
+    //             }
+    //             const rvalue = try self.genNode(Node.absoluteIndex(nidx, node.data.as(.four).c));
+    //             _ = rvalue;
+    //             @panic("foo");
+    //         },
+    //         else => @panic("unhandled node"),
+    //     }
+    // }
 
     // pub fn genImplicitCastIfNeeded()
 
@@ -1281,6 +1455,7 @@ pub const CodeGenerator = struct {
     }
 
     pub fn dataProcImm(op: enum(u32) {
+        pc_rel = 0x00000000,
         add_sub = 0x01000000,
         logical = 0x02000000,
         move = 0x02800000,
@@ -1298,6 +1473,7 @@ pub const CodeGenerator = struct {
     }
 
     pub fn brExcSys(op: enum(u32) {
+        hints = 0xD503201F,
         un_cond_br_reg = 0xD2000000,
         un_cond_br_imm = 0x00000000,
     }, data: OPS) u32 {
@@ -1405,6 +1581,19 @@ pub const CodeGenerator = struct {
             opc: u2,
             sf: bool,
         },
+        opimmloimmhird: packed struct(u32) {
+            rd: u5,
+            immhi: u19,
+            _1: u5 = 0,
+            immlo: u2,
+            op: u1,
+        },
+        crmop2: packed struct(u32) {
+            _1: u5 = 0,
+            op2: u3,
+            crm: u4,
+            _2: u20 = 0,
+        },
         // szVRmoptSRnRt: packed struct(u32) {
         //     rt: u5,
         //     rn: u5,
@@ -1428,31 +1617,60 @@ pub const CodeGenerator = struct {
     }
 
     pub fn writeToFile(self: *Self, path: []const u8) !void {
-        self.builder.ptrTo(std.macho.segment_command_64, self.segment_offset).filesize = self.inst_count * @sizeOf(u32);
-        self.builder.ptrTo(std.macho.segment_command_64, self.segment_offset).vmsize = self.inst_count * @sizeOf(u32);
-        self.builder.ptrToSection(self.segment_offset, 0).size = self.inst_count * @sizeOf(u32);
+        const total_length = self.inst_count * @sizeOf(u32) + self.data_section_buffer.items.len + self.common_section_buffer.items.len;
+        try self.builder.buffer.ensureUnusedCapacity(
+            total_length + self.reloc_buffer.items.len + self.data_section_buffer.items.len + self.common_section_buffer.items.len,
+        );
+        self.builder.ptrTo(std.macho.segment_command_64, self.segment_offset).filesize = total_length;
+        self.builder.ptrTo(std.macho.segment_command_64, self.segment_offset).vmsize = total_length;
+
+        const text_section = self.builder.ptrToSection(self.segment_offset, 0);
+        text_section.size = self.inst_count * @sizeOf(u32);
+
+        if (self.reloc_buffer.items.len > 0) {
+            text_section.reloff = self.builder.currentOffset();
+            text_section.nreloc = @truncate(self.reloc_buffer.items.len);
+            _ = try self.builder.writeSlice(self.reloc_buffer.items);
+        }
+
+        const data_section = self.builder.ptrToSection(self.segment_offset, 1);
+        data_section.addr = text_section.addr + text_section.size;
+        data_section.offset = self.builder.currentOffset();
+        data_section.size = self.data_section_buffer.items.len;
+        try self.builder.buffer.appendSlice(self.data_section_buffer.items);
+
+        const common_section = self.builder.ptrToSection(self.segment_offset, 2);
+        common_section.addr = data_section.addr + data_section.size;
+        common_section.offset = self.builder.currentOffset();
+        common_section.size = self.common_section_buffer.items.len;
+        try self.builder.buffer.appendSlice(self.common_section_buffer.items);
+
+        const sections = [_]*align(1)std.macho.section_64{text_section, data_section, common_section};
 
         // const syms_len = self.builder.currentOffset() - syms_offset;
 
         const str_offset = self.builder.currentOffset();
-        for (self.symbols.items(.value)) |str| {
+        var sym_it = self.symbols.iterator();
+        _ = try self.builder.writeInt(@as(u8, 0));
+        while (sym_it.next()) |sym| {
             _ = try self.builder.writeInt(@as(u8, '_'));
-            _ = try self.builder.writeSlice(str);
+            _ = try self.builder.writeSlice(sym.key_ptr.*);
             _ = try self.builder.writeInt(@as(u8, 0));
         }
         const str_len = self.builder.currentOffset() - str_offset;
 
-        var next_offset: u32 = 0;
+        sym_it = self.symbols.iterator();
+        var next_offset: u32 = 1;
         const syms_offset = self.builder.currentOffset();
-        for (self.symbols.items(.ty), self.symbols.items(.address), self.symbols.items(.value)) |ty, addr, value| {
-            const offset = try self.builder.writeSymbolEntry(self.symtab_offset, next_offset, ty);
-            self.builder.ptrTo(std.macho.nlist_64, offset).n_sect = 1;
-            self.builder.ptrTo(std.macho.nlist_64, offset).n_value = addr;
-            next_offset += @truncate(value.len + 2);
+        while (sym_it.next()) |sym| {
+            const offset = try self.builder.writeSymbolEntry(self.symtab_offset, next_offset, sym.value_ptr.ty);
+            self.builder.ptrTo(std.macho.nlist_64, offset).n_sect = @truncate(sym.value_ptr.section + 1);
+            self.builder.ptrTo(std.macho.nlist_64, offset).n_value = sections[sym.value_ptr.section].addr + sym.value_ptr.address;
+            next_offset += @truncate(sym.key_ptr.len + 2);
         }
 
         self.builder.ptrTo(std.macho.symtab_command, self.symtab_offset).symoff = syms_offset;
-        self.builder.ptrTo(std.macho.symtab_command, self.symtab_offset).nsyms = @truncate(self.symbols.len);
+        self.builder.ptrTo(std.macho.symtab_command, self.symtab_offset).nsyms = @truncate(self.symbols.count());
         self.builder.ptrTo(std.macho.symtab_command, self.symtab_offset).stroff = str_offset;
         self.builder.ptrTo(std.macho.symtab_command, self.symtab_offset).strsize = str_len;
 
@@ -1472,6 +1690,7 @@ pub const MachoSymbolType = packed struct(u8) {
     private: bool = false,
     stab: u3 = 0,
 };
+
 
 pub const MachoBuilder = struct {
     buffer: std.ArrayList(u8),
@@ -1504,6 +1723,7 @@ pub const MachoBuilder = struct {
     pub fn writeToFile(self: *Self, path: []const u8) !void {
         var out_file = try std.fs.cwd().createFile(path, .{});
         try out_file.writeAll(self.buffer.items);
+        // try out_file.chmod(0o777);
     }
 
     pub fn addLoadSegment(self: *Self, num_sections: u32) !u32 {
@@ -1628,6 +1848,10 @@ pub const MachoBuilder = struct {
 
     pub inline fn currentOffset(self: *const Self) u32 {
         return @truncate(self.buffer.items.len);
+    }
+
+    pub inline fn currentOffsetInSection(self: *Self, segment_offset: u32, sect: u32) u32 {
+        return @as(u32, @truncate(self.buffer.items.len)) - self.ptrToSection(segment_offset, sect).offset;
     }
 };
 

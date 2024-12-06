@@ -11,12 +11,14 @@ const NodeIndex = @import("parser.zig").NodeIndex;
 const ty = @import("types.zig");
 
 pub const DefineValue = struct {
+    name_tok: TokenIndex,
     range: TokenRange,
 };
 
 pub const ArgumentMap = std.StringHashMap(DefineValue);
 
 pub const DefineFunction = struct {
+    name_tok: TokenIndex,
     range: TokenRange,
 
     parameters: std.StringArrayHashMap(void),
@@ -44,6 +46,7 @@ pub const Unit = struct {
     node_to_node: std.AutoHashMap(NodeIndex, NodeIndex),
     field_map: std.AutoHashMap(NodeIndex, std.StringHashMap(u32)),
     symbol_table: SymbolTable,
+    enum_constants: std.StringHashMap(u64),
 
     defines: std.StringHashMap(DefineValue),
     define_fns: std.StringHashMap(DefineFunction),
@@ -61,7 +64,7 @@ pub const Unit = struct {
         // }) catch @panic("OOM");
 
         var include_dirs = std.ArrayList([]const u8).init(allocator);
-        include_dirs.append("/opt/homebrew/Cellar/llvm/18.1.7/lib/clang/18/include") catch @panic("OOM");
+        include_dirs.append("/opt/homebrew/Cellar/llvm/19.1.4/lib/clang/19/include") catch @panic("OOM");
         include_dirs.append("/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk/usr/include") catch @panic("OOM");
 
         return .{
@@ -78,6 +81,7 @@ pub const Unit = struct {
             .node_to_type = std.AutoHashMap(NodeIndex, ty.Type).init(allocator),
             .field_map = .init(allocator),
             .symbol_table = SymbolTable.init(allocator),
+            .enum_constants = .init(allocator),
             .defines = std.StringHashMap(DefineValue).init(allocator),
             .define_fns = std.StringHashMap(DefineFunction).init(allocator),
             .include_dirs = include_dirs,
@@ -93,6 +97,7 @@ pub const Unit = struct {
 
     pub fn define(self: *Unit, key: []const u8) void {
         self.defines.put(key, .{
+            .name_tok = .{.file_index = 0, .index = 0},
             .range = .{
                 .start = .{ .file_index = 0, .index = 0 },
                 .end = .{ .file_index = 0, .index = 0 },

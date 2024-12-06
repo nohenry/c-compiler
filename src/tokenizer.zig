@@ -290,7 +290,6 @@ pub const TokenIndex = packed struct(u32) {
 pub const TokenRange = struct {
     start: TokenIndex,
     end: TokenIndex,
-    data: i16 = -1,
     flags: Flags.Type,
 
     pub const Flags = struct {
@@ -298,6 +297,7 @@ pub const TokenRange = struct {
         pub const EXPANSION_ARGUMENTS: Type = (1 << 0);
         pub const EXPANSION_DEPTH: Type = (1 << 1);
         pub const ALREADY_EXPANDED: Type = (1 << 2);
+        pub const EXPANSION_TOKEN: Type = (1 << 3);
     };
 
     /// Creates a range from an inclusive end token index and a count of tokens
@@ -403,6 +403,12 @@ pub const FileTokenizer = struct {
 
             if ((item_index.flags & TokenRange.Flags.EXPANSION_ARGUMENTS) > 0) {
                 self.tokenizer.expansion_stack.items.len -= 1;
+            }
+
+            if ((item_index.flags & TokenRange.Flags.EXPANSION_TOKEN) > 0) {
+                const tok_name_str = self.tokenizer.unit.identifierAt(self.tokenizer.expansion_name_token_stack.getLast());
+                self.tokenizer.expansion_name_token_stack.items.len -= 1;
+                _ = self.tokenizer.disabled_macros.remove(tok_name_str);
             }
 
             if ((item_index.flags & TokenRange.Flags.EXPANSION_DEPTH) > 0) {
@@ -525,7 +531,17 @@ pub const FileTokenizer = struct {
             }
 
             if (last_token) |last_tidx| {
-                if (self.checkIsIdentifier(last_tidx)) |ident_str| {
+                if (self.checkIsIdentifier(last_tidx)) |ident_str| blk: {
+                    if (self.tokenizer.disabled_macros.contains(ident_str)) {
+                        break :blk;
+                    }
+                    // const last_ex_tok = self.tokenizer.expansion_name_token_stack.getLastOrNull();
+                    // if (last_ex_tok) |let| {
+                    //     const last_ident_str = self.tokenizer.unit.identifierAt(let);
+                    //     if (std.mem.eql(u8, ident_str, last_ident_str)) {
+                    //         break :blk;
+                    //     }
+                    // }
                     if (self.checkExpansion(ident_str)) {
                         return self.resolveVirtual(null, null);
                     }
@@ -541,6 +557,14 @@ pub const FileTokenizer = struct {
             .identifier => {
                 if (last_token != null) {
                     self.backVirtual();
+                    if (last_arg) |arg| {
+                        if (arg.hasSingleExpandedToken()) {
+                            return arg.expanded_tokens[0].start;
+                        } else {
+                            self.tokenizer.pushVirtualRanges(arg.expanded_tokens);
+                            return self.nextVirtual()[0].?;
+                        }
+                    }
                     return last_token;
                 }
 
@@ -564,7 +588,17 @@ pub const FileTokenizer = struct {
 
                 if (last_token) |last_tidx| {
                     self.backVirtual();
-                    if (self.checkIsIdentifier(last_tidx)) |ident_str| {
+                    if (self.checkIsIdentifier(last_tidx)) |ident_str| blk: {
+                        // const last_ex_tok = self.tokenizer.expansion_name_token_stack.getLastOrNull();
+                        // if (last_ex_tok) |let| {
+                        //     const last_ident_str = self.tokenizer.unit.identifierAt(let);
+                        //     if (std.mem.eql(u8, ident_str, last_ident_str)) {
+                        //         break :blk;
+                        //     }
+                        // }
+                        if (self.tokenizer.disabled_macros.contains(ident_str)) {
+                            break :blk;
+                        }
                         if (self.checkExpansion(ident_str)) {
                             return self.resolveVirtual(null, null);
                         }
@@ -702,8 +736,18 @@ pub const FileTokenizer = struct {
 
                 self.tokenizer.unit.files.items[self.file_index].tokens.append(new_token) catch @panic("OOM");
 
-                if (new_token.kind == .identifier) {
+                if (new_token.kind == .identifier) blk: {
                     const ident_str = self.tokenizer.unit.identifierAt(new_idx);
+                    // const last_ex_tok = self.tokenizer.expansion_name_token_stack.getLastOrNull();
+                    // if (last_ex_tok) |let| {
+                    //     const last_ident_str = self.tokenizer.unit.identifierAt(let);
+                    //     if (std.mem.eql(u8, ident_str, last_ident_str)) {
+                    //         break :blk;
+                    //     }
+                    // }
+                    if (self.tokenizer.disabled_macros.contains(ident_str)) {
+                        break :blk;
+                    }
                     if (self.checkExpansion(ident_str)) {
                         return self.resolveVirtual(null, null);
                     }
@@ -724,7 +768,17 @@ pub const FileTokenizer = struct {
                         }
                     }
 
-                    if (self.checkIsIdentifier(last_tidx)) |ident_str| {
+                    if (self.checkIsIdentifier(last_tidx)) |ident_str| blk: {
+                        // const last_ex_tok = self.tokenizer.expansion_name_token_stack.getLastOrNull();
+                        // if (last_ex_tok) |let| {
+                        //     const last_ident_str = self.tokenizer.unit.identifierAt(let);
+                        //     if (std.mem.eql(u8, ident_str, last_ident_str)) {
+                        //         break :blk;
+                        //     }
+                        // }
+                        if (self.tokenizer.disabled_macros.contains(ident_str)) {
+                            break :blk;
+                        }
                         if (self.checkExpansion(ident_str)) {
                             return self.resolveVirtual(null, null);
                         }
@@ -888,6 +942,10 @@ pub const FileTokenizer = struct {
     fn searchExpansionArg(self: *Self, arg: []const u8) ?Argument {
         if (self.tokenizer.expansion_stack.items.len == 0) return null;
         var index = self.tokenizer.expansion_stack.items.len;
+        if (std.mem.eql(u8, arg, "__VA_ARGS__")) {
+            index -= 1;
+            return self.tokenizer.expansion_stack.items[index].va_arg;
+        }
         while (index > 0) {
             index -= 1;
             if (self.tokenizer.expansion_stack.items[index].map.get(arg)) |value| {
@@ -948,24 +1006,12 @@ pub const FileTokenizer = struct {
     ///     - define function
     /// and pushes virtual tokens onto the stack, then returns true if was one of the above.
     fn checkExpansion(self: *Self, str: []const u8) bool {
-        // if (self.searchExpansionArg(str)) |value| blk: {
-        //     if (expansion_index) |ei| {
-        //         if (ei == value[1]) break :blk;
-        //     }
-        //     var i = value[0].tokens.len;
-        //     while (i > 0) {
-        //         i -= 1;
-        //         var rng = value[0].tokens[i];
-        //         rng.data = @intCast(value[1]);
-        //         self.tokenizer.pushVirtual(rng);
-        //     }
-
-        //     return true;
-        // }
-
         if (self.tokenizer.unit.defines.get(str)) |def| {
             if (def.range.start.index < def.range.end.index) {
                 self.tokenizer.pushVirtual(def.range);
+
+                self.tokenizer.expansion_name_token_stack.append(def.name_tok) catch @panic("OOM");
+                self.tokenizer.disabled_macros.put(str, {}) catch @panic("OOM");
             }
             return true;
         }
@@ -979,10 +1025,8 @@ pub const FileTokenizer = struct {
                 break :blk1 self.tokenizer.next(false).?;
             };
 
-            // const open_paren_index = self.expect(.open_paren);
-
             var argument_map = ArgumentMap.init(self.tokenizer.allocator);
-            var va_map = if (def.var_arg) std.ArrayList(Argument).init(self.tokenizer.allocator) else undefined;
+            var va_arg: ?Argument = null;
             var parameter_iter = def.parameters.iterator();
 
             var indent: u32 = 0;
@@ -1050,7 +1094,7 @@ pub const FileTokenizer = struct {
                                     if (parameter_iter.next()) |param| {
                                         argument_map.put(param.key_ptr.*, arg) catch @panic("OOM");
                                     } else if (def.var_arg) {
-                                        va_map.append(arg) catch @panic("OOM");
+                                        va_arg = arg;
                                     } else @panic("TODO: parameter arg mismatch");
                                 }
                                 break :blk1;
@@ -1059,68 +1103,66 @@ pub const FileTokenizer = struct {
                         },
                         .close_brace, .close_bracket => indent -= 1,
                         .comma => {
+                            const param = parameter_iter.next();
                             if (indent == 0) {
-                                if (last_token) |tidx| {
-                                    tokens.append(TokenRange.initEndCount(tidx, range_count)) catch @panic("OOM");
+                                if (param != null) {
+                                    if (last_token) |tidx| {
+                                        tokens.append(TokenRange.initEndCount(tidx, range_count)) catch @panic("OOM");
+                                        last_token = null;
+                                        range_count = 0;
+                                    }
+
+                                    const vs_len_start = self.tokenizer.virtual_stack.items.len;
+                                    var unexp_i = tokens.items.len;
+                                    while (unexp_i > 0) {
+                                        unexp_i -= 1;
+                                        self.tokenizer.pushVirtual(tokens.items[unexp_i]);
+                                    }
+
                                     last_token = null;
                                     range_count = 0;
-                                }
-
-                                const vs_len_start = self.tokenizer.virtual_stack.items.len;
-                                var unexp_i = tokens.items.len;
-                                while (unexp_i > 0) {
-                                    unexp_i -= 1;
-                                    self.tokenizer.pushVirtual(tokens.items[unexp_i]);
-                                }
-
-                                last_token = null;
-                                range_count = 0;
-                                while (self.tokenizer.virtual_stack.items.len >= vs_len_start + 1) {
-                                    const vtok = self.resolveVirtual(null, null);
-                                    if (vtok == null) break;
-                                    if (last_token) |ltidx| {
-                                        if (ltidx.file_index == vtok.?.file_index and vtok.?.index == ltidx.index + 1) {
-                                            range_count += 1;
+                                    while (self.tokenizer.virtual_stack.items.len >= vs_len_start + 1) {
+                                        const vtok = self.resolveVirtual(null, null);
+                                        if (vtok == null) break;
+                                        if (last_token) |ltidx| {
+                                            if (ltidx.file_index == vtok.?.file_index and vtok.?.index == ltidx.index + 1) {
+                                                range_count += 1;
+                                            } else {
+                                                expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
+                                                range_count = 1;
+                                            }
                                         } else {
-                                            expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
-                                            range_count = 1;
+                                            range_count += 1;
                                         }
-                                    } else {
-                                        range_count += 1;
+                                        last_token = vtok;
                                     }
-                                    last_token = vtok;
+
+                                    if (last_token) |ltidx| {
+                                        expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
+                                    }
+                                    last_token = null;
+                                    range_count = 0;
+
+                                    const arg = Argument{
+                                        .tokens = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM"),
+                                        .expanded_tokens = self.tokenizer.allocator.dupe(TokenRange, expanded_tokens.items) catch @panic("OOM"),
+                                    };
+                                    argument_map.put(param.?.key_ptr.*, arg) catch @panic("OOM");
+
+                                    tokens.items.len = 0;
+                                    expanded_tokens.items.len = 0;
+                                    continue;
+                                } else if (!def.var_arg) {
+                                    @panic("TODO: parameter arg mismatch");
                                 }
-
-                                if (last_token) |ltidx| {
-                                    expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
-                                }
-                                last_token = null;
-                                range_count = 0;
-
-                                const arg = Argument{
-                                    .tokens = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM"),
-                                    .expanded_tokens = self.tokenizer.allocator.dupe(TokenRange, expanded_tokens.items) catch @panic("OOM"),
-                                };
-                                if (parameter_iter.next()) |param| {
-                                    argument_map.put(param.key_ptr.*, arg) catch @panic("OOM");
-                                } else if (def.var_arg) {
-                                    va_map.append(arg) catch @panic("OOM");
-                                } else @panic("TODO: parameter arg mismatch");
-
-                                tokens.items.len = 0;
-                                expanded_tokens.items.len = 0;
-                                continue;
                             }
                         },
                         else => {},
                     }
-                    // std.log.info("ArgTok: {}: {}", .{pidx, p});
                     if (last_token) |tidx| {
                         if (tidx.file_index == pidx.file_index and pidx.index == tidx.index + 1) {
-                            // std.log.info("RangeIndex++", .{});
                             range_count += 1;
                         } else {
-                            // std.log.info("AppendRange({}, {})", .{tidx, range_count});
                             tokens.append(TokenRange.initEndCount(tidx, range_count)) catch @panic("OOM");
                             range_count = 1;
                         }
@@ -1139,20 +1181,10 @@ pub const FileTokenizer = struct {
                 std.debug.panic("TODO: error (expected {} arg found {})", .{ def.parameters.count(), argument_map.count() });
             }
 
-            // var iter = argument_map.iterator();
-            // while (iter.next()) |arg| {
-            //     std.log.info("\x1b[1;36m{s}\x1b[0m:", .{arg.key_ptr.*});
-            //     for (arg.value_ptr.tokens) |rng| {
-            //         var index = rng.start;
-            //         while (index.index < rng.end.index) : (index.index += 1) {
-            //             std.debug.print("    {}\n", .{self.tokenizer.unit.token(index)});
-            //         }
-            //     }
-            // }
-
             if (def.range.start.index < def.range.end.index) {
                 self.tokenizer.expansion_stack.append(ExpansionArgumentMap{
                     .map = argument_map,
+                    .va_arg = va_arg,
                     .depth = self.tokenizer.expansion_depth,
                 }) catch @panic("OOM");
 
@@ -1161,8 +1193,10 @@ pub const FileTokenizer = struct {
                 self.tokenizer.pushVirtual(TokenRange{
                     .start = def.range.start,
                     .end = def.range.end,
-                    .flags = TokenRange.Flags.EXPANSION_ARGUMENTS | TokenRange.Flags.EXPANSION_DEPTH,
+                    .flags = TokenRange.Flags.EXPANSION_ARGUMENTS | TokenRange.Flags.EXPANSION_DEPTH | TokenRange.Flags.EXPANSION_TOKEN,
                 });
+                self.tokenizer.expansion_name_token_stack.append(def.name_tok) catch @panic("OOM");
+                self.tokenizer.disabled_macros.put(str, {}) catch @panic("OOM");
             }
 
             return true;
@@ -1462,8 +1496,8 @@ pub const FileTokenizer = struct {
                     }
                     const str = self.source[start..self.pos];
 
-                    if (std.mem.eql(u8, str, "Color")) {
-                        std.log.debug("Color", .{});
+                    if (std.mem.eql(u8, str, "__QOS_ENUM")) {
+                        std.log.debug("__QOS_ENUM", .{});
                     }
 
                     if (!self.tokenizer.in_define) {
@@ -1479,8 +1513,6 @@ pub const FileTokenizer = struct {
                     if (keyword_map.get(str)) |kind| {
                         break :blk kind;
                     }
-
-                    // const index = self.tokenizer.unit.getOrPut(str);
 
                     break :blk TokenKind.identifier;
                 },
@@ -1513,8 +1545,6 @@ pub const FileTokenizer = struct {
                         break :blk .hash;
                     } else if (std.mem.eql(u8, directive_str, "#")) {
                         break :blk .hashhash;
-                        // const last_token = self.last_token orelse @panic("Expected token before this one!");
-
                     } else if (std.mem.eql(u8, directive_str, "define")) {
                         const first_token = self.tokenizer.next(true); // identifier
                         const second_token = if (self.pos < self.source_len and self.source[self.pos] == '(') // Open paren must be immediately after identifier
@@ -1586,11 +1616,9 @@ pub const FileTokenizer = struct {
                             }
 
                             const define = self.tokenizer.unit.define_fns.getOrPut(define_str) catch @panic("OOM");
-                            // if (define.found_existing) {
-                            //     std.debug.panic("Found existing define of name \x1b[1;36m'{s}'\x1b[0m", .{define_str});
-                            // }
 
                             define.value_ptr.* = .{
+                                .name_tok = first_token.?,
                                 .range = .{
                                     .start = pidx,
                                     .end = .{
@@ -1602,9 +1630,6 @@ pub const FileTokenizer = struct {
                                 .var_arg = var_arg,
                                 .parameters = parameter_map,
                             };
-                            if (std.mem.eql(u8, define_str, "__SPI_AVAILABLE_END")) {
-                                std.log.debug("__SPI_AVAILABLE_END", .{});
-                            }
                             // std.log.debug("DefineFunction \x1b[1;36m'{s}'\x1b[0m {}:{} - {}:{}", .{
                             //     define_str,
                             //     define.value_ptr.*.range.start.file_index,
@@ -1620,11 +1645,9 @@ pub const FileTokenizer = struct {
                             }
 
                             const define = self.tokenizer.unit.defines.getOrPut(define_str) catch @panic("OOM");
-                            // if (define.found_existing) {
-                            //     std.debug.panic("Found existing define of name \x1b[1;36m'{s}'\x1b[0m", .{define_str});
-                            // }
 
                             define.value_ptr.* = .{
+                                .name_tok = first_token.?,
                                 .range = .{
                                     .start = .{
                                         .index = first_token.?.index + 1,
@@ -1925,6 +1948,7 @@ pub const FileTokenizer = struct {
 
 const ExpansionArgumentMap = struct {
     map: ArgumentMap,
+    va_arg: ?Argument,
     depth: u32,
 };
 
@@ -1937,10 +1961,12 @@ pub const Tokenizer = struct {
 
     virtual_stack: std.ArrayList(TokenRange),
     expansion_stack: std.ArrayList(ExpansionArgumentMap),
+    expansion_name_token_stack: std.ArrayList(TokenIndex),
     if_stack: std.BitStack,
     peeked_token: ?TokenIndex = null,
     in_define: bool = false,
     expansion_depth: u32 = 0,
+    disabled_macros: std.StringHashMap(void),
 
     conditional_skip: bool = false,
 
@@ -1953,6 +1979,8 @@ pub const Tokenizer = struct {
             .file_stack = std.SinglyLinkedList(FileTokenizer){},
             .virtual_stack = std.ArrayList(TokenRange).init(allocator),
             .expansion_stack = std.ArrayList(ExpansionArgumentMap).init(allocator),
+            .expansion_name_token_stack = .init(allocator),
+            .disabled_macros = .init(allocator),
             .if_stack = std.BitStack.init(allocator),
         };
     }
