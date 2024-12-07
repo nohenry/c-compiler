@@ -487,6 +487,7 @@ pub const TypeChecker = struct {
                     std.debug.panic("Function expected {} arguments but received {}", .{ param_types.len, arg_count });
                 }
 
+                // va arg types
                 while (index < arg_end_index) : ({
                     index += 1;
                     count += 1;

@@ -10,9 +10,11 @@ enum { a = 4, f = 3 };
 #define a2(y) a1(y)+1
 #define f a+f
 
-int i;
+int foobar(int a, int b) {
+    return a + b;
+}
 
 int main() {
-    i = 234;
-    return i;
+    int i = 324;
+    return foobar(2, 5);
 }

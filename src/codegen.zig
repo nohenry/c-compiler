@@ -6,11 +6,17 @@ const SimpleEvaluator = @import("typecheck.zig").SimpleEvaluator;
 const TokenKind = @import("tokenizer.zig").TokenKind;
 const Type = @import("types.zig").Type;
 
+const RelocType = enum {
+    variable,
+    function,
+};
+
 const Symbol = struct {
     address: u32,
     section: u32,
     prefix: bool = true,
-    ty: MachoSymbolType,
+    macho_ty: MachoSymbolType,
+    reloc_ty: RelocType,
 };
 
 const MemoryOffset = struct {
@@ -24,6 +30,7 @@ const Value = union(enum) {
     register: u5,
     memory: u32,
     reloc_offset: MemoryOffset,
+    reloc_label: void,
     memory_offset: MemoryOffset,
 
     pub fn getValue(self: @This(), cg: *CodeGenerator, ty: Type, result_ty: ?Type, imm: bool, mem: bool) !Value {
@@ -90,6 +97,29 @@ const Value = union(enum) {
                 }
                 return self;
             },
+            // .reloc_label => |rl| {
+            //     if (ty.kind == .func) {
+            //         const out_reg = cg.availableRegister().?;
+            //         cg.useRegister(out_reg);
+            //         try cg.reloc_buffer.append(std.macho.relocation_info{
+            //             .r_symbolnum = @truncate(rl),
+            //             .r_address = @intCast(cg.builder.currentOffsetInSection(cg.segment_offset, 0)),
+            //             .r_extern = 1,
+            //             .r_length = 2,
+            //             .r_pcrel = 0,
+            //             .r_type = @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGEOFF12),
+            //         });
+            //         _ = try cg.writeInst(CodeGenerator.dataProcImm(.add_sub, .{
+            //             .sfopSshimm12rnrd = .{
+            //                 .rd = out_reg,
+            //                 .rn = rl.register,
+            //                 .imm = 0,
+            //                 .S = false,
+            //                 .op = 0,
+            //             },
+            //         }));
+            //     }
+            // },
             else => return self,
         }
     }
@@ -107,6 +137,7 @@ pub const Layout = struct {
 pub const FunctionContext = struct {
     local_offsets: std.AutoHashMap(NodeIndex, u32),
     next_offset: u32 = 0,
+    sub_invocations: u32 = 0,
     return_type: Type,
 };
 
@@ -302,9 +333,10 @@ pub const CodeGenerator = struct {
                     try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
                         // .address = undefined,
                         // .address = self.builder.currentOffsetInSection(self.segment_offset, 1),
+                        .reloc_ty = .variable,
                         .address = @truncate(offset),
                         .section = 1,
-                        .ty = MachoSymbolType{
+                        .macho_ty = MachoSymbolType{
                             .external = true,
                             .ty = .section,
                         },
@@ -332,9 +364,10 @@ pub const CodeGenerator = struct {
                     const ident_index = node.data.two.a;
                     try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
                         // .address = undefined,
+                        .reloc_ty = .variable,
                         .address = @truncate(offset),
                         .section = 2,
-                        .ty = MachoSymbolType{
+                        .macho_ty = MachoSymbolType{
                             .external = true,
                             .ty = .section,
                         },
@@ -398,9 +431,10 @@ pub const CodeGenerator = struct {
             .function_declaration_body => {
                 const ident_index = node.data.as(.two).a;
                 try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
+                    .reloc_ty = .function,
                     .address = self.inst_count * 4,
                     .section = 0,
-                    .ty = MachoSymbolType{
+                    .macho_ty = MachoSymbolType{
                         .external = true,
                         .ty = .section,
                     },
@@ -415,10 +449,32 @@ pub const CodeGenerator = struct {
                 self.fctx = FunctionContext{
                     .local_offsets = .init(self.allocator),
                     .return_type = fn_type.kind.func.ret_ty,
+                    .next_offset = 16,
                 };
 
                 // Subtract from SP for stack frame (placeholder)
                 const sub_sp_index = try self.writeInst(0);
+
+                _ = try self.writeInst(loadStore(.load_store_pair_offset, 0, 0b10, 0, 0, .{
+                    .opcVLimmRt2RnRt = .{
+                        .rt = X29,
+                        .rn = SP,
+                        .rt2 = X30,
+                        .imm = 0,
+                        .L = 0,
+                        .V = 0,
+                        .opc = 0b10,
+                    },
+                }));
+                // _ = try self.writeInst(dataProcImm(.add_sub, .{
+                //     .sfopSshimm12rnrd = .{
+                //         .rd = X29,
+                //         .rn = SP,
+                //         .imm = 0,
+                //         .S = false,
+                //         .op = 0,
+                //     },
+                // }));
 
                 const fn_param_types = self.unit.interner.getMultiTypes(fn_type.kind.func.params);
 
@@ -458,20 +514,23 @@ pub const CodeGenerator = struct {
                                 .parameter => {},
                                 .parameter_ident => {
                                     const layout = self.computeLayout(fn_param_types[i]);
-                                    self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
-                                    try self.fctx.?.local_offsets.put(param_nidx, self.fctx.?.next_offset);
 
                                     // Parameters after w7 are already on stack
                                     if (i < X8) {
+                                        self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
+                                        try self.fctx.?.local_offsets.put(param_nidx, self.fctx.?.next_offset);
                                         _ = try self.writeInst(formStore(
                                             fn_param_types[i],
                                             @truncate(i),
                                             SP,
                                             self.fctx.?.next_offset,
                                         ));
-                                    }
 
-                                    self.fctx.?.next_offset += layout.max();
+                                        self.fctx.?.next_offset += layout.max();
+                                    } else {
+                                        // try self.fctx.?.local_offsets.put(param_nidx, self.fctx.?.next_offset);
+                                        @panic("todo: handle this");
+                                    }
                                 },
                                 .parameter_ellipsis => {},
                                 else => @panic("compielr bug"),
@@ -489,8 +548,20 @@ pub const CodeGenerator = struct {
                 const body_index = Node.absoluteIndex(nidx, node.data.as(.four).d);
                 try self.genCompound(body_index);
 
+                _ = try self.writeInst(loadStore(.load_store_pair_offset, 0, 0b10, 0, 0, .{
+                    .opcVLimmRt2RnRt = .{
+                        .rt = X29,
+                        .rn = SP,
+                        .rt2 = X30,
+                        .imm = 0,
+                        .L = 1,
+                        .V = 0,
+                        .opc = 0b10,
+                    },
+                }));
+
                 const stack_frame_size = std.mem.alignForward(u32, self.fctx.?.next_offset, 16);
-                if (stack_frame_size == 0) {
+                if (false) {
                     if (self.builder.currentOffset() == sub_sp_index + 4) {
                         // repurpose this for ret
                         _ = try self.writeInstAt(brExcSys(.un_cond_br_reg, .{
@@ -600,7 +671,7 @@ pub const CodeGenerator = struct {
     }
 
     pub fn genNodeExpr(self: *Self, nidx: NodeIndex, result_ty: ?Type) !Value {
-        _ = result_ty;
+        // _ = result_ty;
         const node = &self.unit.nodes.items[nidx];
         switch (node.kind) {
             .char_literal => return .{ .immediate = node.data.two.a },
@@ -630,32 +701,66 @@ pub const CodeGenerator = struct {
                             .register = SP,
                         },
                     };
-                } else if (self.symbols.getIndex(str)) |sym| {
+                } else if (self.symbols.getIndex(str)) |sym_index| {
+                    const sym = self.symbols.values()[sym_index];
                     try self.reloc_buffer.append(std.macho.relocation_info{
-                        .r_symbolnum = @truncate(sym),
+                        .r_symbolnum = @truncate(sym_index),
                         .r_address = @intCast(self.builder.currentOffsetInSection(self.segment_offset, 0)),
                         .r_extern = 1,
                         .r_length = 2,
                         .r_pcrel = 1,
-                        .r_type = @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGE21),
+                        // .r_type = @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGE21),
+                        .r_type = switch (sym.reloc_ty) {
+                            .variable => @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGE21),
+                            .function => if (result_ty == null)
+                                @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_BRANCH26)
+                            else
+                                @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGE21),
+                        },
                     });
-                    const out_reg = self.availableRegister().?;
-                    self.useRegister(out_reg);
-                    // const addr: u31 =
-                    _ = try self.writeInst(dataProcImm(.pc_rel, .{
-                        .opimmloimmhird = .{
-                            .rd = out_reg,
-                            .immlo = 0,
-                            .immhi = 0,
-                            .op = 1,
+                    switch (sym.reloc_ty) {
+                        .variable => {
+                            const out_reg = self.availableRegister().?;
+                            self.useRegister(out_reg);
+                            // const addr: u31 =
+                            _ = try self.writeInst(dataProcImm(.pc_rel, .{
+                                .opimmloimmhird = .{
+                                    .rd = out_reg,
+                                    .immlo = 0,
+                                    .immhi = 0,
+                                    .op = 1,
+                                },
+                            }));
+                            return .{
+                                .reloc_offset = .{
+                                    .offset = @truncate(sym_index),
+                                    .register = out_reg,
+                                },
+                            };
                         },
-                    }));
-                    return .{
-                        .reloc_offset = .{
-                            .offset = @truncate(sym),
-                            .register = out_reg,
+                        .function => {
+                            // const out_reg = self.availableRegister().?;
+                            // self.useRegister(out_reg);
+                            // if (result_ty == null) {
+                            //     _ = try self.writeInst(dataProcImm(.pc_rel, .{
+                            //         .opimmloimmhird = .{
+                            //             .rd = out_reg,
+                            //             .immlo = 0,
+                            //             .immhi = 0,
+                            //             .op = 1,
+                            //         },
+                            //     }));
+                            //     return .{
+                            //         .reloc_offset = .{
+                            //             .offset = @truncate(sym_index),
+                            //             .register = out_reg,
+                            //         },
+                            //     };
+                            // }
+
+                            return .reloc_label;
                         },
-                    };
+                    }
                 }
 
                 @panic("unhandled lvalue");
@@ -831,6 +936,140 @@ pub const CodeGenerator = struct {
                     else => {},
                 }
             },
+            .invoke => {
+                const invokee_val = try self.genNodeExpr(node.data.two.a, null);
+                self.fctx.?.sub_invocations += 1;
+
+                switch (invokee_val) {
+                    .reloc_label => {
+                        _ = try self.writeInst(brExcSys(.un_cond_br_imm, .{
+                            .opimm26 = .{
+                                .imm = 0,
+                                .op = 1,
+                            },
+                        }));
+                    },
+                    else => @panic("todo"),
+                }
+
+                self.useRegister(X0);
+                return .{ .register = X0 };
+            },
+            .invoke_one_arg => {
+                self.fctx.?.sub_invocations += 1;
+                const fn_type = self.unit.node_to_type.get(node.data.two.a).?;
+                const param_types = self.unit.interner.getMultiTypes(fn_type.kind.func.params);
+
+                const arg_ty = self.unit.node_to_type.get(node.data.two.b).?;
+
+                const old_ex_reg = self.expects_reg;
+                self.expects_reg = X0;
+                defer self.expects_reg = old_ex_reg;
+
+                const pre_arg_val = try self.genNodeExpr(node.data.two.b, param_types[0]);
+                const arg_val = try pre_arg_val.getValue(self, arg_ty, param_types[0], true, false);
+
+                try self.writeLoadArg(arg_val, arg_ty, X0);
+
+                // must do this after args for correct relocation
+                const invokee_val = try self.genNodeExpr(node.data.two.a, null);
+                switch (invokee_val) {
+                    .reloc_label => {
+                        _ = try self.writeInst(brExcSys(.un_cond_br_imm, .{
+                            .opimm26 = .{
+                                .imm = 0,
+                                .op = 1,
+                            },
+                        }));
+                    },
+                    else => @panic("todo"),
+                }
+
+                self.useRegister(X0);
+                return .{ .register = X0 };
+            },
+            .invoke_args => {
+                self.fctx.?.sub_invocations += 1;
+                const invokee_index = Node.absoluteIndex(nidx, node.data.four.a);
+                const fn_type = self.unit.node_to_type.get(invokee_index).?;
+                const param_types = self.unit.interner.getMultiTypes(fn_type.kind.func.params);
+
+                var index = node.data.two.b;
+                const end_index = index + param_types.len;
+                const arg_end_index = index + node.data.four.b;
+
+                var count: u32 = 0;
+
+                const old_ex_reg = self.expects_reg;
+                defer self.expects_reg = old_ex_reg;
+                while (index < end_index) : ({
+                    index += 1;
+                    count += 1;
+                }) {
+                    const node_index = self.unit.node_ranges.items[index];
+                    const arg_ty = self.unit.node_to_type.get(node_index).?;
+                    
+                    if (count < X8) {
+                        self.expects_reg = @truncate(count);
+
+                        const pre_arg_val = try self.genNodeExpr(node_index, param_types[count]);
+                        const arg_val = try pre_arg_val.getValue(self, arg_ty, param_types[count], true, false);
+
+                        try self.writeLoadArg(arg_val, arg_ty, @truncate(count));
+                    } else {
+                        @panic("todo");
+                    }
+
+                    // const provided_type = try self.checkNode(node_index, param_types[count]);
+
+                    // if (self.implicitlyCast(provided_type, param_types[count])) |ty| {
+                    //     _ = ty;
+                    // } else {
+                    //     std.debug.panic("Function expected type \x1b[32m{s}\x1b[0m for argument {} but got \x1b[32m{s}\x1b[0m instead", .{
+                    //         self.unit.interner.printTyToStr(param_types[count], self.unit.allocator),
+                    //         count,
+                    //         self.unit.interner.printTyToStr(provided_type, self.unit.allocator),
+                    //     });
+                    // }
+                }
+
+                // va arg values
+                while (index < arg_end_index) : ({
+                    index += 1;
+                    count += 1;
+                }) {
+                    const node_index = self.unit.node_ranges.items[index];
+                    const arg_ty = self.unit.node_to_type.get(node_index).?;
+                    
+                    if (count < X8) {
+                        self.expects_reg = @truncate(count);
+
+                        const pre_arg_val = try self.genNodeExpr(node_index, param_types[count]);
+                        const arg_val = try pre_arg_val.getValue(self, arg_ty, param_types[count], true, false);
+
+                        try self.writeLoadArg(arg_val, arg_ty, @truncate(count));
+                    } else {
+                        @panic("todo");
+                    }
+                }
+
+                // must do this after args for correct relocation
+                const invokee_val = try self.genNodeExpr(invokee_index, null);
+                switch (invokee_val) {
+                    .reloc_label => {
+                        _ = try self.writeInst(brExcSys(.un_cond_br_imm, .{
+                            .opimm26 = .{
+                                .imm = 0,
+                                .op = 1,
+                            },
+                        }));
+                    },
+                    else => @panic("todo"),
+                }
+
+                self.useRegister(X0);
+                return .{ .register = X0 };
+            },
             .index => {
                 const ptr_ty = self.unit.node_to_type.get(node.data.two.a).?;
                 const offset_ty = self.unit.node_to_type.get(node.data.two.b).?;
@@ -984,6 +1223,40 @@ pub const CodeGenerator = struct {
         }
 
         return .{ .inst = 0 };
+    }
+
+    pub fn writeLoadArg(self: *Self, arg_val: Value, arg_ty: Type, arg_reg: ?u5) !void {
+        switch (arg_val) {
+            .immediate => |val| {
+                const layout = self.computeLayout(arg_ty);
+                const inst = CodeGenerator.dataProcImm(.move, .{
+                    .sfopchwimm16rd = .{
+                        .rd = arg_reg.?,
+                        .imm = @truncate(val),
+                        .hw = 0,
+                        .opc = 0b10,
+                        .sf = layout.size >= 8,
+                    },
+                });
+                _ = try self.writeInst(inst);
+            },
+            .register => |reg| {
+                if (arg_val.register != arg_reg.?) {
+                    _ = try self.writeInst(dataProcReg(.logical_shift, .{
+                        .sfopcshNRmimmRnRd = .{
+                            .rd = X0,
+                            .rn = X31,
+                            .imm = 0,
+                            .rm = reg,
+                            .N = false,
+                            .sh = 0,
+                            .opc = 0b01,
+                        },
+                    }));
+                }
+            },
+            else => @panic("todo"),
+        }
     }
 
     // pub fn genNodeLvalue(self: *Self, nidx: NodeIndex) !Value {
@@ -1450,6 +1723,7 @@ pub const CodeGenerator = struct {
 
     pub fn loadStore(op0: enum(u4) {
         load_store_register = 0b0011,
+        load_store_pair_offset = 0b0010,
     }, op1: u1, op2: u2, op3: u6, op4: u2, data: OPS) u32 {
         return @as(u32, 0x08000000) | (@as(u32, @intFromEnum(op0)) << 28) | (@as(u32, op1) << 26) | (@as(u32, op2) << 23) | (@as(u32, op3) << 16) | (@as(u32, op4) << 10) | @as(u32, @bitCast(data));
     }
@@ -1594,6 +1868,22 @@ pub const CodeGenerator = struct {
             crm: u4,
             _2: u20 = 0,
         },
+        opimm26: packed struct(u32) {
+            imm: u26,
+            _1: u5 = 0,
+            op: u1,
+        },
+        opcVLimmRt2RnRt: packed struct(u32) {
+            rt: u5,
+            rn: u5,
+            rt2: u5,
+            imm: u7,
+            L: u1,
+            _1: u3 = 0,
+            V: u1,
+            _2: u3 = 0,
+            opc: u2,
+        },
         // szVRmoptSRnRt: packed struct(u32) {
         //     rt: u5,
         //     rn: u5,
@@ -1645,7 +1935,7 @@ pub const CodeGenerator = struct {
         common_section.size = self.common_section_buffer.items.len;
         try self.builder.buffer.appendSlice(self.common_section_buffer.items);
 
-        const sections = [_]*align(1)std.macho.section_64{text_section, data_section, common_section};
+        const sections = [_]*align(1) std.macho.section_64{ text_section, data_section, common_section };
 
         // const syms_len = self.builder.currentOffset() - syms_offset;
 
@@ -1663,7 +1953,7 @@ pub const CodeGenerator = struct {
         var next_offset: u32 = 1;
         const syms_offset = self.builder.currentOffset();
         while (sym_it.next()) |sym| {
-            const offset = try self.builder.writeSymbolEntry(self.symtab_offset, next_offset, sym.value_ptr.ty);
+            const offset = try self.builder.writeSymbolEntry(self.symtab_offset, next_offset, sym.value_ptr.macho_ty);
             self.builder.ptrTo(std.macho.nlist_64, offset).n_sect = @truncate(sym.value_ptr.section + 1);
             self.builder.ptrTo(std.macho.nlist_64, offset).n_value = sections[sym.value_ptr.section].addr + sym.value_ptr.address;
             next_offset += @truncate(sym.key_ptr.len + 2);
@@ -1690,7 +1980,6 @@ pub const MachoSymbolType = packed struct(u8) {
     private: bool = false,
     stab: u3 = 0,
 };
-
 
 pub const MachoBuilder = struct {
     buffer: std.ArrayList(u8),
