@@ -97,7 +97,7 @@ pub const Unit = struct {
 
     pub fn define(self: *Unit, key: []const u8) void {
         self.defines.put(key, .{
-            .name_tok = .{.file_index = 0, .index = 0},
+            .name_tok = .{ .file_index = 0, .index = 0 },
             .range = .{
                 .start = .{ .file_index = 0, .index = 0 },
                 .end = .{ .file_index = 0, .index = 0 },
@@ -468,6 +468,108 @@ pub const Unit = struct {
         return source[tok.start..index];
     }
 
+    /// returns length of string
+    pub fn writeStringToBuffer(self: *const Self, tidx: TokenIndex, writer: anytype) !u32 {
+        const tok = self.token(tidx);
+        const source = self.files.items[tidx.file_index].source;
+        std.debug.assert(source[tok.start] == '"');
+        var index = tok.start + 1;
+        var length: u32 = 0;
+
+        while (index < source.len) : ({
+            index += 1;
+            length += 1;
+        }) {
+            switch (source[index]) {
+                '\\' => {
+                    index += 1;
+
+                    switch (source[index]) {
+                        '\\' => try writer.writeByte('\\'),
+                        'n' => try writer.writeByte('\n'),
+                        't' => try writer.writeByte('\t'),
+                        'r' => try writer.writeByte('\r'),
+                        '0' => try writer.writeByte(0),
+                        '"' => try writer.writeByte('"'),
+                        else => std.debug.panic("Invalid escape '{c}'", .{source[index]}),
+                    }
+                },
+                '\"' => break,
+                else => |c| try writer.writeByte(c),
+            }
+        }
+
+        return length;
+    }
+
+    pub fn writeStringifiedToBuffer(self: *const Self, tidx: TokenIndex, writer: anytype) !u32 {
+        const tok = self.token(tidx);
+        const source = self.files.items[tidx.file_index].source;
+        var index = tok.start;
+        var length: u32 = 0;
+        var indent: u32 = 0;
+
+        while (index < source.len) : ({
+            index += 1;
+            length += 1;
+        }) {
+            switch (source[index]) {
+                '\\' => {
+                    index += 1;
+
+                    switch (source[index]) {
+                        '\\' => try writer.writeByte('\\'),
+                        'n' => try writer.writeByte('\n'),
+                        't' => try writer.writeByte('\t'),
+                        'r' => try writer.writeByte('\r'),
+                        '0' => try writer.writeByte(0),
+                        else => std.debug.panic("Invalid escape '{c}'", .{source[index]}),
+                    }
+                },
+                '(' => indent += 1,
+                ')' => if (indent == 0) break else {
+                    indent -= 1;
+                },
+                ',' => if (indent == 0) break,
+                else => |c| try writer.writeByte(c),
+            }
+        }
+
+        return length;
+    }
+
+    pub fn stringLength(
+        self: *const Self,
+        tidx: TokenIndex,
+    ) u32 {
+        const tok = self.token(tidx);
+        if (tok.kind == .stringified_literal) return self.stringifiedLength(tidx);
+        const source = self.files.items[tidx.file_index].source;
+        std.debug.assert(source[tok.start] == '"');
+        var index = tok.start + 1;
+        var length: u32 = 0;
+
+        while (index < source.len) : ({
+            index += 1;
+            length += 1;
+        }) {
+            switch (source[index]) {
+                '\\' => {
+                    index += 1;
+
+                    switch (source[index]) {
+                        '\\', 'n', 't', 'r', '0', '"' => {},
+                        else => std.debug.panic("Invalid escape '{c}'", .{source[index]}),
+                    }
+                },
+                '\"' => break,
+                else => {},
+            }
+        }
+
+        return length;
+    }
+
     pub fn stringAt(self: *const Self, tidx: TokenIndex) []const u8 {
         const tok = self.token(tidx);
         const source = self.files.items[tidx.file_index].source;
@@ -481,6 +583,38 @@ pub const Unit = struct {
         }
 
         return source[tok.start + 1 .. index];
+    }
+
+    pub fn stringifiedLength(self: *const Self, tidx: TokenIndex) u32 {
+        const tok = self.token(tidx);
+        const source = self.files.items[tidx.file_index].source;
+        var index = tok.start;
+        var indent: u32 = 0;
+        var length: u32 = 0;
+
+        while (index < source.len) : ({
+            index += 1;
+            length += 1;
+        }) {
+            switch (source[index]) {
+                '\\' => {
+                    index += 1;
+
+                    switch (source[index]) {
+                        '\\', 'n', 't', 'r', '0', '"' => {},
+                        else => std.debug.panic("Invalid escape '{c}'", .{source[index]}),
+                    }
+                },
+                '(' => indent += 1,
+                ')' => if (indent == 0) break else {
+                    indent -= 1;
+                },
+                ',' => if (indent == 0) break,
+                else => {},
+            }
+        }
+
+        return length;
     }
 
     pub fn stringifiedAt(self: *const Self, tidx: TokenIndex) []const u8 {

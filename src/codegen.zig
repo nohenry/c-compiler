@@ -70,26 +70,12 @@ const Value = union(enum) {
                     });
                     mo.offset = 0;
                 }
-                if (cg.availableRegister()) |reg| {
-                    if (result_ty) |rty| {
-                        _ = try cg.writeCastLoad(ty, rty, reg, mo.register, mo.offset);
-                    } else {
-                        _ = try cg.writeInst(CodeGenerator.formLoad(ty, reg, mo.register, mo.offset));
-                    }
-                    // _ = try cg.writeInst(CodeGenerator.loadStore(.load_store_register, 0, 0b10, 0, 0, .{
-                    //     .szVopcimm12rnrt = .{
-                    //         .rt = reg,
-                    //         .rn = mo.register,
-                    //         .imm = @truncate(mo.offset),
-                    //         .opc = 0b01,
-                    //         .V = false,
-                    //         .sz = 0b11,
-                    //     },
-                    // }));
-                    cg.useRegister(reg);
-                    return .{ .register = reg };
+                if (result_ty) |rty| {
+                    _ = try cg.writeCastLoad(ty, rty, mo.register, mo.register, mo.offset);
+                } else {
+                    _ = try cg.writeInst(CodeGenerator.formLoad(ty, mo.register, mo.register, mo.offset));
                 }
-                @panic("shouldbnt be here");
+                return .{ .register = mo.register };
             },
             .register => |reg| {
                 if (result_ty) |rty| {
@@ -97,29 +83,6 @@ const Value = union(enum) {
                 }
                 return self;
             },
-            // .reloc_label => |rl| {
-            //     if (ty.kind == .func) {
-            //         const out_reg = cg.availableRegister().?;
-            //         cg.useRegister(out_reg);
-            //         try cg.reloc_buffer.append(std.macho.relocation_info{
-            //             .r_symbolnum = @truncate(rl),
-            //             .r_address = @intCast(cg.builder.currentOffsetInSection(cg.segment_offset, 0)),
-            //             .r_extern = 1,
-            //             .r_length = 2,
-            //             .r_pcrel = 0,
-            //             .r_type = @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGEOFF12),
-            //         });
-            //         _ = try cg.writeInst(CodeGenerator.dataProcImm(.add_sub, .{
-            //             .sfopSshimm12rnrd = .{
-            //                 .rd = out_reg,
-            //                 .rn = rl.register,
-            //                 .imm = 0,
-            //                 .S = false,
-            //                 .op = 0,
-            //             },
-            //         }));
-            //     }
-            // },
             else => return self,
         }
     }
@@ -137,6 +100,7 @@ pub const Layout = struct {
 pub const FunctionContext = struct {
     local_offsets: std.AutoHashMap(NodeIndex, u32),
     next_offset: u32 = 0,
+    max_additional_stack: u32 = 0,
     sub_invocations: u32 = 0,
     return_type: Type,
 };
@@ -158,6 +122,7 @@ pub const CodeGenerator = struct {
 
     data_section_buffer: std.ArrayList(u8),
     common_section_buffer: std.ArrayList(u8),
+    cstring_section_buffer: std.ArrayList(u8),
     reloc_buffer: std.ArrayList(std.macho.relocation_info),
 
     symbols: std.StringArrayHashMap(Symbol),
@@ -173,7 +138,7 @@ pub const CodeGenerator = struct {
     pub fn init(unit: *Unit) !Self {
         var builder = try MachoBuilder.init(unit.allocator);
 
-        const load_segment = try builder.addLoadSegment(3);
+        const load_segment = try builder.addLoadSegment(4);
         const symtab_segment = try builder.addLoadSymTab();
         const text_section = builder.ptrToSection(load_segment, 0);
         @memset(&text_section.sectname, 0);
@@ -223,6 +188,22 @@ pub const CodeGenerator = struct {
         common_section.reserved2 = 0;
         common_section.reserved3 = 0;
 
+        const cstring_section = builder.ptrToSection(load_segment, 3);
+        @memset(&cstring_section.sectname, 0);
+        @memset(&cstring_section.segname, 0);
+        @memcpy(cstring_section.sectname[0.."__cstring".len], "__cstring");
+        @memcpy(cstring_section.segname[0.."__TEXT".len], "__TEXT");
+
+        cstring_section.addr = 0;
+        cstring_section.size = 0;
+        cstring_section.@"align" = 2;
+        cstring_section.reloff = 0;
+        cstring_section.nreloc = 0;
+        cstring_section.flags = std.macho.S_REGULAR;
+        cstring_section.reserved1 = 0;
+        cstring_section.reserved2 = 0;
+        cstring_section.reserved3 = 0;
+
         // const offset = try builder.writeSlice(&[_]u8{1, 2, 3, 4, 5});
         // section.offset = offset;
         // builder.ptrTo(std.macho.segment_command_64, load_segment).fileoff = offset;
@@ -243,6 +224,7 @@ pub const CodeGenerator = struct {
 
             .data_section_buffer = .init(unit.allocator),
             .common_section_buffer = .init(unit.allocator),
+            .cstring_section_buffer = .init(unit.allocator),
             .reloc_buffer = .init(unit.allocator),
             .structs = .init(unit.allocator),
             .segment_offset = load_segment,
@@ -335,7 +317,7 @@ pub const CodeGenerator = struct {
                         // .address = self.builder.currentOffsetInSection(self.segment_offset, 1),
                         .reloc_ty = .variable,
                         .address = @truncate(offset),
-                        .section = 1,
+                        .section = 2,
                         .macho_ty = MachoSymbolType{
                             .external = true,
                             .ty = .section,
@@ -350,7 +332,7 @@ pub const CodeGenerator = struct {
                     const init_value = try self.genNodeExpr(init_index, decl_ty);
                     const value = try init_value.getValue(self, decl_ty, decl_ty, false, false);
 
-                    _ = try self.writeInst(formStore(decl_ty, value.register, SP, offset));
+                    _ = try self.writeInst(formStore(decl_ty, value.register, LOCAL_OFFSET_REGISTER, offset));
                 }
             },
             .var_declaration => {
@@ -366,7 +348,7 @@ pub const CodeGenerator = struct {
                         // .address = undefined,
                         .reloc_ty = .variable,
                         .address = @truncate(offset),
-                        .section = 2,
+                        .section = 3,
                         .macho_ty = MachoSymbolType{
                             .external = true,
                             .ty = .section,
@@ -428,12 +410,26 @@ pub const CodeGenerator = struct {
                 //     },
                 // }));
             },
+            .function_declaration => {
+                const ident_index = node.data.as(.two).a;
+                try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
+                    .reloc_ty = .function,
+                    .address = 0,
+                    .section = 0,
+                    .macho_ty = MachoSymbolType{
+                        .external = true,
+                        .ty = .undef,
+                    },
+                });
+
+                return .{ .inst = 0 };
+            },
             .function_declaration_body => {
                 const ident_index = node.data.as(.two).a;
                 try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
                     .reloc_ty = .function,
                     .address = self.inst_count * 4,
-                    .section = 0,
+                    .section = 1,
                     .macho_ty = MachoSymbolType{
                         .external = true,
                         .ty = .section,
@@ -449,32 +445,29 @@ pub const CodeGenerator = struct {
                 self.fctx = FunctionContext{
                     .local_offsets = .init(self.allocator),
                     .return_type = fn_type.kind.func.ret_ty,
-                    .next_offset = 16,
+                    .next_offset = 0,
                 };
 
-                // Subtract from SP for stack frame (placeholder)
-                const sub_sp_index = try self.writeInst(0);
+                // prologue-epilogue layout
+                // sub sp, sp, <size of local variables + 16 for x29 and x30 + size of additional stack size>
+                // stp x29, x30, [sp, <size of additional stack size>]
+                // add x29, sp, <size of additional stack size + 16 for x29 and x30>
+                //
+                // ... body
+                //
+                // ldp x29, x30, [sp, <size of additional stack size>]
+                // add sp, sp, <size of local variables + 16 + size of additional stack size>
+                //
+                // stackframe layout
+                // | ----- Local Variables ----- | nl bytes
+                // | -----     X29, X30    ----- | 16 bytes
+                // | ----  Additional Stack ---- | na bytes
+                // total stack size = aligned(nl + 16) + aligned(na)
+                // alignment is 16 bytes for aarch64
 
-                _ = try self.writeInst(loadStore(.load_store_pair_offset, 0, 0b10, 0, 0, .{
-                    .opcVLimmRt2RnRt = .{
-                        .rt = X29,
-                        .rn = SP,
-                        .rt2 = X30,
-                        .imm = 0,
-                        .L = 0,
-                        .V = 0,
-                        .opc = 0b10,
-                    },
-                }));
-                // _ = try self.writeInst(dataProcImm(.add_sub, .{
-                //     .sfopSshimm12rnrd = .{
-                //         .rd = X29,
-                //         .rn = SP,
-                //         .imm = 0,
-                //         .S = false,
-                //         .op = 0,
-                //     },
-                // }));
+                const sub_sp_index_1 = try self.writeInst(0);
+                const stp_x29_x30 = try self.writeInst(0);
+                const mov_x29_sp = try self.writeInst(0);
 
                 const fn_param_types = self.unit.interner.getMultiTypes(fn_type.kind.func.params);
 
@@ -542,27 +535,70 @@ pub const CodeGenerator = struct {
                     else => @panic("compiler bug"),
                 }
 
-                // for (fn_param_types) |param_type| {
-                // }
-
                 const body_index = Node.absoluteIndex(nidx, node.data.as(.four).d);
                 try self.genCompound(body_index);
+
+                const stack_frame_size = std.mem.alignForward(u32, self.fctx.?.next_offset + 16, 16);
+                const additional_max_size = std.mem.alignForward(u32, self.fctx.?.max_additional_stack, 16);
+                // const total_stack_size = std.mem.alignForward(u32, self.fctx.?.next_offset + self.fctx.?.max_additional_stack, 16);
+                const total_stack_size = stack_frame_size + additional_max_size;
+
+                _ = try self.writeInstAt(dataProcImm(.add_sub, .{
+                    .sfopSshimm12rnrd = .{
+                        .op = 1,
+                        .S = false,
+                        .imm = @truncate(total_stack_size),
+                        .rn = SP,
+                        .rd = SP,
+                    },
+                }), sub_sp_index_1);
+
+                _ = try self.writeInstAt(loadStore(.load_store_pair_offset, 0, 0b10, 0, 0, .{
+                    .opcVLimmRt2RnRt = .{
+                        .rt = X29,
+                        .rn = SP,
+                        .rt2 = X30,
+                        .imm = @intCast(additional_max_size / 8),
+                        .L = 0,
+                        .V = 0,
+                        .opc = 0b10,
+                    },
+                }), stp_x29_x30);
+
+                _ = try self.writeInstAt(dataProcImm(.add_sub, .{
+                    .sfopSshimm12rnrd = .{
+                        .rd = LOCAL_OFFSET_REGISTER,
+                        .rn = SP,
+                        .imm = @truncate(additional_max_size + 16), // +16 for x29 and x30
+                        .S = false,
+                        .op = 0,
+                    },
+                }), mov_x29_sp);
 
                 _ = try self.writeInst(loadStore(.load_store_pair_offset, 0, 0b10, 0, 0, .{
                     .opcVLimmRt2RnRt = .{
                         .rt = X29,
                         .rn = SP,
                         .rt2 = X30,
-                        .imm = 0,
+                        .imm = @intCast(additional_max_size / 8),
                         .L = 1,
                         .V = 0,
                         .opc = 0b10,
                     },
                 }));
 
-                const stack_frame_size = std.mem.alignForward(u32, self.fctx.?.next_offset, 16);
+                _ = try self.writeInst(dataProcImm(.add_sub, .{
+                    .sfopSshimm12rnrd = .{
+                        .op = 0,
+                        .S = false,
+                        .imm = @truncate(total_stack_size),
+                        .rn = SP,
+                        .rd = SP,
+                    },
+                }));
+
                 if (false) {
-                    if (self.builder.currentOffset() == sub_sp_index + 4) {
+                    if (self.builder.currentOffset() == sub_sp_index_1 + 4) {
                         // repurpose this for ret
                         _ = try self.writeInstAt(brExcSys(.un_cond_br_reg, .{
                             .opcop23Rnop4 = .{
@@ -570,14 +606,14 @@ pub const CodeGenerator = struct {
                                 .op3 = 0,
                                 .opc = 0b10,
                             },
-                        }), sub_sp_index);
+                        }), sub_sp_index_1);
                     } else {
                         _ = try self.writeInstAt(brExcSys(.hints, .{
                             .crmop2 = .{
                                 .op2 = 0,
                                 .crm = 0,
                             },
-                        }), sub_sp_index);
+                        }), sub_sp_index_1);
                         _ = try self.writeInst(brExcSys(.un_cond_br_reg, .{
                             .opcop23Rnop4 = .{
                                 .rn = LR,
@@ -587,26 +623,6 @@ pub const CodeGenerator = struct {
                         }));
                     }
                 } else {
-                    _ = try self.writeInstAt(dataProcImm(.add_sub, .{
-                        .sfopSshimm12rnrd = .{
-                            .op = 1,
-                            .S = false,
-                            .imm = @truncate(stack_frame_size),
-                            .rn = SP,
-                            .rd = SP,
-                        },
-                    }), sub_sp_index);
-
-                    _ = try self.writeInst(dataProcImm(.add_sub, .{
-                        .sfopSshimm12rnrd = .{
-                            .op = 0,
-                            .S = false,
-                            .imm = @truncate(stack_frame_size),
-                            .rn = SP,
-                            .rd = SP,
-                        },
-                    }));
-
                     _ = try self.writeInst(brExcSys(.un_cond_br_reg, .{
                         .opcop23Rnop4 = .{
                             .rn = LR,
@@ -670,6 +686,31 @@ pub const CodeGenerator = struct {
         // });
     }
 
+    /// nidx should be index to string_literal_join or string_literal
+    pub fn genStringJoin(self: *Self, nidx: NodeIndex) !void {
+        const node = &self.unit.nodes.items[nidx];
+
+        switch (node.kind) {
+            .string_literal => {
+                _ = try self.unit.writeStringToBuffer(@bitCast(node.data.two.a), self.cstring_section_buffer.writer());
+            },
+            .stringified_literal => {
+                _ = try self.unit.writeStringifiedToBuffer(@bitCast(node.data.two.a), self.cstring_section_buffer.writer());
+            },
+            .string_literal_join => {
+                try self.genStringJoin(node.data.two.a);
+
+                const this_node = self.unit.token(@bitCast(node.data.two.b));
+                switch (this_node.kind) {
+                    .string_literal => _ = try self.unit.writeStringToBuffer(@bitCast(node.data.two.b), self.cstring_section_buffer.writer()),
+                    .stringified_literal => _ = try self.unit.writeStringifiedToBuffer(@bitCast(node.data.two.b), self.cstring_section_buffer.writer()),
+                    else => unreachable,
+                }
+            },
+            else => unreachable,
+        }
+    }
+
     pub fn genNodeExpr(self: *Self, nidx: NodeIndex, result_ty: ?Type) !Value {
         // _ = result_ty;
         const node = &self.unit.nodes.items[nidx];
@@ -683,6 +724,52 @@ pub const CodeGenerator = struct {
             .unsigned_long_long_literal => return .{ .immediate = node.data.two.a },
             .size_literal => return .{ .immediate = node.data.two.a },
             .unsigned_size_literal => return .{ .immediate = node.data.two.a },
+            .string_literal, .string_literal_join, .stringified_literal => {
+                const offset = self.cstring_section_buffer.items.len;
+                try self.genStringJoin(nidx);
+                try self.cstring_section_buffer.append(0);
+
+                var symbol_value_buffer = std.ArrayList(u8).init(self.unit.allocator);
+                try std.fmt.format(symbol_value_buffer.writer(), ".cstr{}", .{self.symbols.count()});
+                const sym_index = self.symbols.count();
+                try self.symbols.put(symbol_value_buffer.items, Symbol{
+                    .reloc_ty = .variable,
+                    .address = @truncate(offset),
+                    .section = 4,
+                    .macho_ty = MachoSymbolType{
+                        .external = true,
+                        .ty = .section,
+                    },
+                });
+
+                try self.reloc_buffer.append(std.macho.relocation_info{
+                    .r_symbolnum = @truncate(sym_index),
+                    .r_address = @intCast(self.builder.currentOffsetInSection(self.segment_offset, 0)),
+                    .r_extern = 1,
+                    .r_length = 2,
+                    .r_pcrel = 1,
+                    .r_type = @intFromEnum(std.macho.reloc_type_arm64.ARM64_RELOC_PAGE21),
+                });
+
+                const out_reg = self.availableRegister().?;
+                self.useRegister(out_reg);
+
+                _ = try self.writeInst(dataProcImm(.pc_rel, .{
+                    .opimmloimmhird = .{
+                        .rd = out_reg,
+                        .immlo = 0,
+                        .immhi = 0,
+                        .op = 1,
+                    },
+                }));
+
+                return .{
+                    .reloc_offset = .{
+                        .offset = @truncate(sym_index),
+                        .register = out_reg,
+                    },
+                };
+            },
             .identifier => {
                 // const refed_nidx = self.unit.node_to_node.get(nidx).?;
                 // const local = self.fctx.?.local_offsets.get(refed_nidx).?;
@@ -698,7 +785,7 @@ pub const CodeGenerator = struct {
                     return .{
                         .memory_offset = .{
                             .offset = vr,
-                            .register = SP,
+                            .register = LOCAL_OFFSET_REGISTER,
                         },
                     };
                 } else if (self.symbols.getIndex(str)) |sym_index| {
@@ -1008,10 +1095,13 @@ pub const CodeGenerator = struct {
                 }) {
                     const node_index = self.unit.node_ranges.items[index];
                     const arg_ty = self.unit.node_to_type.get(node_index).?;
-                    
+
                     if (count < X8) {
                         self.expects_reg = @truncate(count);
+                        self.useRegister(@truncate(count));
 
+                        const old_registers = self.registers;
+                        defer self.registers = old_registers;
                         const pre_arg_val = try self.genNodeExpr(node_index, param_types[count]);
                         const arg_val = try pre_arg_val.getValue(self, arg_ty, param_types[count], true, false);
 
@@ -1019,20 +1109,11 @@ pub const CodeGenerator = struct {
                     } else {
                         @panic("todo");
                     }
-
-                    // const provided_type = try self.checkNode(node_index, param_types[count]);
-
-                    // if (self.implicitlyCast(provided_type, param_types[count])) |ty| {
-                    //     _ = ty;
-                    // } else {
-                    //     std.debug.panic("Function expected type \x1b[32m{s}\x1b[0m for argument {} but got \x1b[32m{s}\x1b[0m instead", .{
-                    //         self.unit.interner.printTyToStr(param_types[count], self.unit.allocator),
-                    //         count,
-                    //         self.unit.interner.printTyToStr(provided_type, self.unit.allocator),
-                    //     });
-                    // }
                 }
 
+                const temp_reg = self.availableRegister().?;
+                self.useRegister(temp_reg);
+                var stack_offset: u32 = 0;
                 // va arg values
                 while (index < arg_end_index) : ({
                     index += 1;
@@ -1040,18 +1121,19 @@ pub const CodeGenerator = struct {
                 }) {
                     const node_index = self.unit.node_ranges.items[index];
                     const arg_ty = self.unit.node_to_type.get(node_index).?;
-                    
-                    if (count < X8) {
-                        self.expects_reg = @truncate(count);
 
-                        const pre_arg_val = try self.genNodeExpr(node_index, param_types[count]);
-                        const arg_val = try pre_arg_val.getValue(self, arg_ty, param_types[count], true, false);
+                    const layout = self.computeLayout(arg_ty);
+                    stack_offset = std.mem.alignForward(u32, stack_offset, layout.alignment);
 
-                        try self.writeLoadArg(arg_val, arg_ty, @truncate(count));
-                    } else {
-                        @panic("todo");
-                    }
+                    const pre_arg_val = try self.genNodeExpr(node_index, null);
+                    const arg_val = try pre_arg_val.getValue(self, arg_ty, null, true, false);
+                    try self.writeLoadArg(arg_val, arg_ty, temp_reg);
+
+                    _ = try self.writeInst(formStore(arg_ty, temp_reg, SP, stack_offset));
+
+                    stack_offset += layout.max();
                 }
+                self.fctx.?.max_additional_stack = @max(self.fctx.?.max_additional_stack, stack_offset);
 
                 // must do this after args for correct relocation
                 const invokee_val = try self.genNodeExpr(invokee_index, null);
@@ -1536,6 +1618,20 @@ pub const CodeGenerator = struct {
 
             return;
         }
+
+        if (ty.kind == .array and result_ty.kind == .pointer) {
+            _ = try self.writeInst(dataProcImm(.add_sub, .{
+                .sfopSshimm12rnrd = .{
+                    .rd = out_reg,
+                    .rn = out_reg,
+                    .imm = 0,
+                    .S = false,
+                    .op = 0,
+                },
+            }));
+            return;
+        }
+
         unreachable;
     }
 
@@ -1877,7 +1973,7 @@ pub const CodeGenerator = struct {
             rt: u5,
             rn: u5,
             rt2: u5,
-            imm: u7,
+            imm: i7,
             L: u1,
             _1: u3 = 0,
             V: u1,
@@ -1907,9 +2003,9 @@ pub const CodeGenerator = struct {
     }
 
     pub fn writeToFile(self: *Self, path: []const u8) !void {
-        const total_length = self.inst_count * @sizeOf(u32) + self.data_section_buffer.items.len + self.common_section_buffer.items.len;
+        const total_length = self.inst_count * @sizeOf(u32) + self.data_section_buffer.items.len + self.common_section_buffer.items.len + self.cstring_section_buffer.items.len;
         try self.builder.buffer.ensureUnusedCapacity(
-            total_length + self.reloc_buffer.items.len + self.data_section_buffer.items.len + self.common_section_buffer.items.len,
+            total_length,
         );
         self.builder.ptrTo(std.macho.segment_command_64, self.segment_offset).filesize = total_length;
         self.builder.ptrTo(std.macho.segment_command_64, self.segment_offset).vmsize = total_length;
@@ -1935,7 +2031,14 @@ pub const CodeGenerator = struct {
         common_section.size = self.common_section_buffer.items.len;
         try self.builder.buffer.appendSlice(self.common_section_buffer.items);
 
-        const sections = [_]*align(1) std.macho.section_64{ text_section, data_section, common_section };
+        const cstring_section = self.builder.ptrToSection(self.segment_offset, 3);
+        cstring_section.addr = common_section.addr + common_section.size;
+        cstring_section.offset = self.builder.currentOffset();
+        cstring_section.size = self.cstring_section_buffer.items.len;
+        try self.builder.buffer.appendSlice(self.cstring_section_buffer.items);
+
+        const sections = [_]*align(1) std.macho.section_64{ text_section, data_section, common_section, cstring_section };
+        // const sections = [_]*align(1) std.macho.section_64{ text_section };
 
         // const syms_len = self.builder.currentOffset() - syms_offset;
 
@@ -1954,8 +2057,10 @@ pub const CodeGenerator = struct {
         const syms_offset = self.builder.currentOffset();
         while (sym_it.next()) |sym| {
             const offset = try self.builder.writeSymbolEntry(self.symtab_offset, next_offset, sym.value_ptr.macho_ty);
-            self.builder.ptrTo(std.macho.nlist_64, offset).n_sect = @truncate(sym.value_ptr.section + 1);
-            self.builder.ptrTo(std.macho.nlist_64, offset).n_value = sections[sym.value_ptr.section].addr + sym.value_ptr.address;
+            self.builder.ptrTo(std.macho.nlist_64, offset).n_sect = @truncate(sym.value_ptr.section);
+            if (sym.value_ptr.section > 0) {
+                self.builder.ptrTo(std.macho.nlist_64, offset).n_value = sections[sym.value_ptr.section - 1].addr + sym.value_ptr.address;
+            }
             next_offset += @truncate(sym.key_ptr.len + 2);
         }
 
@@ -2146,6 +2251,7 @@ pub const MachoBuilder = struct {
 
 const SP: u5 = 31;
 const XZR: u5 = 31;
+const LOCAL_OFFSET_REGISTER: u5 = X29;
 const LR: u5 = 30;
 const X0: u5 = 0;
 const X1: u5 = 1;

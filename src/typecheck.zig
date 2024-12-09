@@ -19,6 +19,22 @@ pub const TypeChecker = struct {
         };
     }
 
+    /// nidx should be index to string_literal_join or string_literal
+    pub fn getStringJoinLength(self: *Self, nidx: NodeIndex, len: u32) u32 {
+        const node = &self.unit.nodes.items[nidx];
+
+        switch (node.kind) {
+            .string_literal, .stringified_literal => {
+                return self.unit.stringLength(@bitCast(node.data.two.a)) + len;
+            },
+            .string_literal_join => {
+                const length = self.unit.stringLength(@bitCast(node.data.two.b));
+                return try @call(.always_tail, getStringJoinLength, .{self, node.data.two.a, length + len});
+            },
+            else => unreachable,
+        }
+    }
+
     pub fn checkNode(self: *Self, nidx: NodeIndex, expected_type: ?Type) !Type {
         const node = &self.unit.nodes.items[nidx];
         const result: Type = switch (node.kind) {
@@ -32,11 +48,25 @@ pub const TypeChecker = struct {
             .unsigned_long_literal => self.unit.interner.longTy(false, 0),
             .long_long_literal => self.unit.interner.longlongTy(true, 0),
             .unsigned_long_long_literal => self.unit.interner.longlongTy(false, 0),
-            .string_literal => return self.unit.interner.arrayTy(
+            .string_literal => self.unit.interner.arrayTy(
                 self.unit.interner.charTy(false, 0),
-                self.unit.stringAt(@bitCast(node.data.two.a)).len,
+                self.unit.stringLength(@bitCast(node.data.two.a)) + 1,
                 0,
             ),
+            .string_literal_join => blk: {
+                break :blk self.unit.interner.arrayTy(
+                    self.unit.interner.charTy(false, 0),
+                    self.getStringJoinLength(nidx, 1),
+                    0,
+                );
+            },
+            .stringified_literal => blk: {
+                break :blk self.unit.interner.arrayTy(
+                    self.unit.interner.charTy(false, 0),
+                    self.getStringJoinLength(nidx, 1),
+                    0,
+                );
+            },
             .initializer_list => expected_type orelse std.debug.panic("Unable to infer initializer type", .{}),
             .initializer_list_one => blk: {
                 const designation = &self.unit.nodes.items[node.data.two.a];
@@ -1255,13 +1285,13 @@ pub const TypeChecker = struct {
             });
             return to;
         } else if (from.kind == .array and to.kind == .pointer) {
-            if (from.kind.array.base == to.kind.pointer.base) {
+            if (self.implicitlyCast(from.kind.array.base, to.kind.pointer.base) != null) {
                 if (from.qualifiers & ~to.qualifiers == 0) {
                     return to;
                 }
             }
         } else if (from.kind == .array_unsized and to.kind == .pointer) {
-            if (from.kind.array.base == to.kind.pointer.base) {
+            if (self.implicitlyCast(from.kind.array_unsized.base, to.kind.pointer.base) != null) {
                 if (from.qualifiers & ~to.qualifiers == 0) {
                     return to;
                 }

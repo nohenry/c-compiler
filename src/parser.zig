@@ -427,7 +427,12 @@ pub const Node = extern struct {
             .unsigned_size_literal => try writer.print("\x1b[1;35mIntLiteral\x1b[0m \x1b[32m(size_t)\x1b[0m \x1b[1;33m{}\x1b[0m", .{self.data.long}),
             .string_literal => try writer.print("\x1b[1;35mStringLiteral\x1b[0m \x1b[1;33m\"{s}\"\x1b[0m", .{unit.stringAt(@bitCast(self.data.as(.two).a))}),
             .string_literal_join => {
-                try writer.print("\x1b[1;35mStringLiteralJoin\x1b[0m \x1b[1;33m\"{s}\"\x1b[0m", .{unit.stringAt(@bitCast(self.data.as(.two).b))});
+                const this_node = unit.token(@bitCast(self.data.two.b));
+                switch (this_node.kind) {
+                    .string_literal => try writer.print("\x1b[1;35mStringLiteralJoin\x1b[0m \x1b[1;33m\"{s}\"\x1b[0m", .{unit.stringAt(@bitCast(self.data.as(.two).b))}),
+                    .stringified_literal => try writer.print("\x1b[1;35mStringLiteralJoin\x1b[0m \x1b[1;33m\"{s}\"\x1b[0m", .{unit.stringifiedAt(@bitCast(self.data.as(.two).b))}),
+                    else => unreachable,
+                }
                 result = .{ .node = self.data.as(.two).a };
             },
             .stringified_literal => try writer.print("\x1b[1;35mStringifiedLiteral\x1b[0m \x1b[1;33m\"{s}\"\x1b[0m", .{unit.stringifiedAt(@bitCast(self.data.as(.two).a))}),
@@ -3295,16 +3300,20 @@ pub const Parser = struct {
                     .long = self.unit.ivalue(ptok.index),
                 },
             },
-            .string_literal => {
+            .string_literal, .stringified_literal => {
                 self.nextToken();
                 var return_node = try self.createNode(Node{
-                    .kind = .string_literal,
+                    .kind = switch (ptok.token.kind) {
+                        .string_literal => .string_literal,
+                        .stringified_literal => .stringified_literal,
+                        else => unreachable,
+                    },
                     .data = .{
                         .two = .{ .a = @bitCast(ptok.index), .b = 0 },
                     },
                 });
                 var ntok = self.peekToken();
-                while (ntok != null and ntok.?.token.kind == .string_literal) : (ntok = self.peekToken()) {
+                while (ntok != null and (ntok.?.token.kind == .string_literal or ntok.?.token.kind == .stringified_literal)) : (ntok = self.peekToken()) {
                     self.nextToken();
                     return_node = try self.createNode(Node{
                         .kind = .string_literal_join,
@@ -3317,12 +3326,6 @@ pub const Parser = struct {
                     });
                 }
                 return return_node;
-            },
-            .stringified_literal => Node{
-                .kind = .stringified_literal,
-                .data = .{
-                    .two = .{ .a = @bitCast(ptok.index), .b = 0 },
-                },
             },
             .char_literal => Node{
                 .kind = .char_literal,

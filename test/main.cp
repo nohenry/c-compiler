@@ -10,11 +10,13 @@ enum { a = 4, f = 3 };
 #define a2(y) a1(y)+1
 #define f a+f
 
-int foobar(int a, int b) {
-    return a + b;
-}
+// int m;
+// int m1 = 2;
+int printf(const char *c, ...);
+
+#define FOO(x) #x
 
 int main() {
-    int i = 324;
-    return foobar(2, 5);
+    printf("bruh" FOO(hello ) "fooar\n");
+    return 0;
 }
