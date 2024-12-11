@@ -1716,10 +1716,13 @@ pub const Parser = struct {
         if (type_kind == null) {
             var it = self.unit.type_names.iterator();
             while (it.next()) |value| {
-                std.log.info("TypeName: \x1b[1;36m'{s}'\x1b[0m", .{value.key_ptr.*});
+                std.log.debug("TypeName: \x1b[1;36m'{s}'\x1b[0m", .{value.key_ptr.*});
             }
             std.log.info("File: {s}", .{self.unit.files.items[ptok.?.index.file_index].file_path});
             std.log.info("Position: {}", .{self.unit.token(ptok.?.index)});
+
+            std.log.info("File: {s}", .{self.unit.files.items[self.tokenizer.file_stack.first.?.data.file_index].file_path});
+            std.log.info("Position: {}", .{self.tokenizer.file_stack.first.?.data.pos});
         }
         switch (type_kind.?) {
             .type_name, .atomic_type => {
@@ -3123,7 +3126,6 @@ pub const Parser = struct {
                             const starti = self.unit.node_ranges.items.len;
                             try self.unit.node_ranges.appendSlice(these_nodes.items);
 
-                            std.log.info("{}", .{left});
                             unary_data.as(.four).a = @truncate(self.relativeOffset(left));
                             unary_data.as(.four).b = @truncate(these_nodes.items.len);
                             unary_data.as(.two).b = @truncate(starti);
@@ -3354,8 +3356,45 @@ pub const Parser = struct {
                     },
                 });
             },
-            .type_name => {
-                self.nextToken();
+
+            // We can allow types in here for builtin functions
+            .auto,
+            .atomic,
+            .@"const",
+            .@"enum",
+            .@"extern",
+            .@"inline",
+            .noreturn,
+            .register,
+            .restrict,
+            .static,
+            .static_assert,
+            .@"struct",
+            .thread_local,
+            .typedef,
+            .@"union",
+            .void,
+            .@"volatile",
+            .type_name,
+            .unsigned,
+            .signed,
+            .char,
+            .short,
+            .int,
+            .long,
+            .float,
+            .double,
+            .bool,
+            => {
+                var storage_class: StorageClass.Type = 0;
+                var identifier: ?TokenIndex = null;
+                var attribute_data: ?NodeData = null;
+                const type_node = try self.parseDeclarationSpecifiers(&storage_class, &attribute_data);
+                if (attribute_data != null) @panic("what do we do?");
+                return (try self.parseDeclarator(type_node, &identifier)).node.?;
+            },
+            // .type_name => {
+            //     self.nextToken();
                 // const ntok = self.peekToken();
                 // if (ntok != null and ntok.?.token.kind == .colon) {
                 //     self.nextToken();
@@ -3368,13 +3407,13 @@ pub const Parser = struct {
                 //     });
                 // }
 
-                return self.createNode(Node{
-                    .kind = .type_name,
-                    .data = .{
-                        .two = .{ .a = @bitCast(ptok.index), .b = 0 },
-                    },
-                });
-            },
+            //     return self.createNode(Node{
+            //         .kind = .type_name,
+            //         .data = .{
+            //             .two = .{ .a = @bitCast(ptok.index), .b = 0 },
+            //         },
+            //     });
+            // },
             else => std.debug.panic("Unexpected in primary {}", .{ptok.token.kind}),
         };
 

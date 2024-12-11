@@ -2,6 +2,7 @@ const std = @import("std");
 const Unit = @import("unit.zig").Unit;
 const NodeIndex = @import("parser.zig").NodeIndex;
 const Node = @import("parser.zig").Node;
+const StorageClass = @import("parser.zig").StorageClass;
 const SimpleEvaluator = @import("typecheck.zig").SimpleEvaluator;
 const TokenKind = @import("tokenizer.zig").TokenKind;
 const Type = @import("types.zig").Type;
@@ -17,10 +18,11 @@ const Symbol = struct {
     prefix: bool = true,
     macho_ty: MachoSymbolType,
     reloc_ty: RelocType,
+    uses: u32 = 0,
 };
 
 const MemoryOffset = struct {
-    offset: u32,
+    offset: i32,
     register: u5,
 };
 
@@ -32,6 +34,8 @@ const Value = union(enum) {
     reloc_offset: MemoryOffset,
     reloc_label: void,
     memory_offset: MemoryOffset,
+
+    builtin: BuiltinFunction,
 
     pub fn getValue(self: @This(), cg: *CodeGenerator, ty: Type, result_ty: ?Type, imm: bool, mem: bool) !Value {
         var s = self;
@@ -61,7 +65,7 @@ const Value = union(enum) {
             .memory_offset, .reloc_offset => |*mo| {
                 if (self == .reloc_offset) {
                     try cg.reloc_buffer.append(std.macho.relocation_info{
-                        .r_symbolnum = @truncate(mo.offset),
+                        .r_symbolnum = @intCast(mo.offset),
                         .r_address = @intCast(cg.builder.currentOffsetInSection(cg.segment_offset, 0)),
                         .r_extern = 1,
                         .r_length = 2,
@@ -98,7 +102,7 @@ pub const Layout = struct {
 };
 
 pub const FunctionContext = struct {
-    local_offsets: std.AutoHashMap(NodeIndex, u32),
+    local_offsets: std.AutoHashMap(NodeIndex, i32),
     next_offset: u32 = 0,
     max_additional_stack: u32 = 0,
     sub_invocations: u32 = 0,
@@ -107,6 +111,34 @@ pub const FunctionContext = struct {
 
 pub const StructLayout = struct {
     offsets: std.AutoHashMap(u32, u32),
+};
+
+pub const BuiltinFunction = *const fn (*CodeGenerator, []const NodeIndex) (std.mem.Allocator.Error)!Value;
+pub const BuiltinsCodeGen = struct {
+    pub const map = std.StaticStringMap(BuiltinFunction).initComptime(blk: {
+        const decls = @typeInfo(@This()).@"struct".decls;
+        var result: [decls.len - 1]struct { []const u8, BuiltinFunction } = undefined;
+        for (decls, 0..) |decl, i| {
+            if (std.mem.eql(u8, decl.name, "map")) {
+                continue;
+            }
+            result[i - 1][0] = decl.name;
+            result[i - 1][1] = @field(@This(), decl.name);
+        }
+        break :blk &result;
+    });
+
+    pub fn __builtin_va_start(cg: *CodeGenerator, args: []const NodeIndex) !Value {
+        _ = cg;
+        _ = args;
+        return .{ .inst = 0 };
+    }
+
+    pub fn __builtin_va_arg(cg: *CodeGenerator, args: []const NodeIndex) !Value {
+        _ = cg;
+        _ = args;
+        return .{ .inst = 0 };
+    }
 };
 
 pub const CodeGenerator = struct {
@@ -126,8 +158,10 @@ pub const CodeGenerator = struct {
     reloc_buffer: std.ArrayList(std.macho.relocation_info),
 
     symbols: std.StringArrayHashMap(Symbol),
+    zero_use_symbol_index: u32 = 0,
     structs: std.AutoHashMap(NodeIndex, StructLayout),
     expects_reg: ?u5 = null,
+    storage_class: ?StorageClass.Type = null,
 
     fctx: ?FunctionContext = null,
 
@@ -235,6 +269,63 @@ pub const CodeGenerator = struct {
         };
     }
 
+    /// Inserts a symbol key/value in the symbol map.
+    /// Must use this function as it preserves order of used symbols first, then unused
+    /// I.e. if the sym is used more than zero times, it is in the first half of the array hash map
+    /// If the symbol is unused it is in the later half.
+    ///
+    /// The purpose of this is to preserve symbol indicies for existing relocations.
+    /// Also can early break out of symbol dumping loop
+    pub fn insertSymbol(self: *Self, str: []const u8, sym: Symbol) !void {
+        if (sym.uses == 0) {
+            try self.symbols.put(str, sym);
+        } else if (self.symbols.count() == 0) {
+            try self.symbols.put(str, sym);
+            self.zero_use_symbol_index = 1;
+        } else if (self.zero_use_symbol_index == self.symbols.count()) {
+            try self.symbols.put(str, sym);
+            self.zero_use_symbol_index += 1;
+        } else {
+            try self.symbols.put(str, sym);
+            const key = self.symbols.keys()[self.zero_use_symbol_index];
+            const entry = self.symbols.fetchSwapRemove(key).?;
+            try self.symbols.put(entry.key, entry.value);
+            self.zero_use_symbol_index += 1;
+        }
+    }
+
+    /// Increments symbol usage counter by 1.
+    /// Must use this function as it preserves order of used symbols first, then unused
+    /// Returns new index of the symbol (it can stay the same)
+    pub fn incUsage(self: *Self, sym_index: usize) !usize {
+        self.symbols.values()[sym_index].uses += 1;
+        if (sym_index < self.zero_use_symbol_index) {
+            return sym_index;
+        } else {
+            // c = sym_index
+            // |0|1|2|3|4|5|6| index
+            //        ^        zero_use_symbol_index
+            //    a   b   c d  symbols
+            // next:
+            // |0|1|2|3|4|5|6|
+            //        ^
+            //    a   b   d c
+            // |0|1|2|3|4|5|6|
+            //        ^
+            //    a   c   d b
+            const key = self.symbols.keys()[sym_index];
+            const sym_entry = self.symbols.fetchSwapRemove(key).?;
+            try self.symbols.put(sym_entry.key, sym_entry.value);
+
+            const zi_key = self.symbols.keys()[self.zero_use_symbol_index];
+            const entry = self.symbols.fetchSwapRemove(zi_key).?;
+            try self.symbols.put(entry.key, entry.value);
+
+            self.zero_use_symbol_index += 1;
+            return self.zero_use_symbol_index - 1;
+        }
+    }
+
     inline fn nodeptr(self: *const Self, nidx: NodeIndex) *Node {
         return &self.unit.nodes.items[nidx];
     }
@@ -272,13 +363,19 @@ pub const CodeGenerator = struct {
 
     pub fn genNode(self: *Self, nidx: NodeIndex) (std.mem.Allocator.Error)!Value {
         const node = self.nodeptr(nidx);
+        const old_registers = self.registers;
+        defer self.registers = old_registers;
 
         switch (node.kind) {
-            .declaration => {
+            .declaration => blk: {
+                const old_sc = self.storage_class;
+                defer self.storage_class = old_sc;
+
                 var next_index = node.data.as(.two).a;
                 const count = node.data.as(.four).c;
                 const storage = node.data.as(.eight).g;
-                _ = storage;
+                if ((storage & StorageClass.typedef) > 0) break :blk;
+                self.storage_class = storage;
 
                 const end_index = next_index + count;
                 while (next_index != end_index) : (next_index += 1) {
@@ -287,6 +384,9 @@ pub const CodeGenerator = struct {
                 }
             },
             .var_declaration_init => {
+                const ident_index1 = node.data.two.a;
+                const ident_str = self.unit.identifierAt(@bitCast(ident_index1));
+                std.log.debug("vardeclinit {s}", .{ident_str});
                 const decl_ty = self.unit.declared_type.get(nidx).?;
                 const layout = self.computeLayout(decl_ty);
 
@@ -312,7 +412,7 @@ pub const CodeGenerator = struct {
                     }
 
                     const ident_index = node.data.two.a;
-                    try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
+                    try self.insertSymbol(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
                         // .address = undefined,
                         // .address = self.builder.currentOffsetInSection(self.segment_offset, 1),
                         .reloc_ty = .variable,
@@ -322,29 +422,47 @@ pub const CodeGenerator = struct {
                             .external = true,
                             .ty = .section,
                         },
+                        .uses = 1,
                     });
                 } else {
                     self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
-                    const offset = self.fctx.?.next_offset;
                     self.fctx.?.next_offset += layout.max();
+                    const offset = -@as(i32, @intCast(self.fctx.?.next_offset));
                     try self.fctx.?.local_offsets.put(nidx, offset);
+                    std.log.info("foo {}", .{offset});
 
                     const init_value = try self.genNodeExpr(init_index, decl_ty);
                     const value = try init_value.getValue(self, decl_ty, decl_ty, false, false);
 
-                    _ = try self.writeInst(formStore(decl_ty, value.register, LOCAL_OFFSET_REGISTER, offset));
+                    if (value == .register) {
+                        _ = try self.writeInst(try self.formStore(decl_ty, value.register, LOCAL_OFFSET_REGISTER, offset));
+                    } else {
+                        std.log.err("Invalid init vallue (todo probabyl)", .{});
+                    }
                 }
             },
             .var_declaration => {
+                const ident_index = node.data.two.a;
+                const ident_str = self.unit.identifierAt(@bitCast(ident_index));
+                std.log.debug("vardecl {s}", .{ident_str});
                 const decl_ty = self.unit.declared_type.get(nidx).?;
                 const layout = self.computeLayout(decl_ty);
 
-                if (self.fctx == null) {
+                if ((self.storage_class.? & StorageClass.@"extern") > 0) {
+                    try self.insertSymbol(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
+                        .reloc_ty = .variable,
+                        .address = 0,
+                        .section = 0,
+                        .macho_ty = MachoSymbolType{
+                            .external = true,
+                            .ty = .undef,
+                        },
+                    });
+                } else if (self.fctx == null) {
                     const offset = self.common_section_buffer.items.len;
                     _ = try self.common_section_buffer.addManyAsSlice(layout.max());
 
-                    const ident_index = node.data.two.a;
-                    try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
+                    try self.insertSymbol(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
                         // .address = undefined,
                         .reloc_ty = .variable,
                         .address = @truncate(offset),
@@ -353,10 +471,11 @@ pub const CodeGenerator = struct {
                             .external = true,
                             .ty = .section,
                         },
+                        .uses = 1,
                     });
                 } else {
                     self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
-                    const offset = self.fctx.?.next_offset;
+                    const offset = -@as(i32, @intCast(self.fctx.?.next_offset));
                     self.fctx.?.next_offset += layout.max();
                     try self.fctx.?.local_offsets.put(nidx, offset);
                 }
@@ -412,7 +531,7 @@ pub const CodeGenerator = struct {
             },
             .function_declaration => {
                 const ident_index = node.data.as(.two).a;
-                try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
+                try self.insertSymbol(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
                     .reloc_ty = .function,
                     .address = 0,
                     .section = 0,
@@ -426,7 +545,7 @@ pub const CodeGenerator = struct {
             },
             .function_declaration_body => {
                 const ident_index = node.data.as(.two).a;
-                try self.symbols.put(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
+                try self.insertSymbol(self.unit.identifierAt(@bitCast(ident_index)), Symbol{
                     .reloc_ty = .function,
                     .address = self.inst_count * 4,
                     .section = 1,
@@ -434,10 +553,11 @@ pub const CodeGenerator = struct {
                         .external = true,
                         .ty = .section,
                     },
+                    .uses = 1,
                 });
 
-                const old_registers = self.registers;
-                defer self.registers = old_registers;
+                // const old_registers = self.registers;
+                // defer self.registers = old_registers;
 
                 const fn_type = self.unit.declared_type.get(nidx).?;
                 const old_fctx = self.fctx;
@@ -451,7 +571,7 @@ pub const CodeGenerator = struct {
                 // prologue-epilogue layout
                 // sub sp, sp, <size of local variables + 16 for x29 and x30 + size of additional stack size>
                 // stp x29, x30, [sp, <size of additional stack size>]
-                // add x29, sp, <size of additional stack size + 16 for x29 and x30>
+                // add x29, sp, <size of local variables + 16 for x29 and x30 + size of additional stack size>
                 //
                 // ... body
                 //
@@ -483,14 +603,15 @@ pub const CodeGenerator = struct {
                             .parameter => {},
                             .parameter_ident => {
                                 const layout = self.computeLayout(fn_param_types[i]);
+                                self.fctx.?.next_offset += layout.max();
+                                const offset = -@as(i32, @intCast(self.fctx.?.next_offset));
                                 try self.fctx.?.local_offsets.put(param_nidx, 0);
-                                _ = try self.writeInst(formStore(
+                                _ = try self.writeInst(try self.formStore(
                                     fn_param_types[i],
                                     0,
                                     SP,
-                                    self.fctx.?.next_offset,
+                                    offset,
                                 ));
-                                self.fctx.?.next_offset += layout.max();
                             },
                             .parameter_ellipsis => {},
                             else => @panic("compielr bug"),
@@ -511,12 +632,13 @@ pub const CodeGenerator = struct {
                                     // Parameters after w7 are already on stack
                                     if (i < X8) {
                                         self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
-                                        try self.fctx.?.local_offsets.put(param_nidx, self.fctx.?.next_offset);
-                                        _ = try self.writeInst(formStore(
+                                        const offset = -@as(i32, @intCast(self.fctx.?.next_offset));
+                                        try self.fctx.?.local_offsets.put(param_nidx, offset);
+                                        _ = try self.writeInst(try self.formStore(
                                             fn_param_types[i],
                                             @truncate(i),
                                             SP,
-                                            self.fctx.?.next_offset,
+                                            offset,
                                         ));
 
                                         self.fctx.?.next_offset += layout.max();
@@ -569,7 +691,7 @@ pub const CodeGenerator = struct {
                     .sfopSshimm12rnrd = .{
                         .rd = LOCAL_OFFSET_REGISTER,
                         .rn = SP,
-                        .imm = @truncate(additional_max_size + 16), // +16 for x29 and x30
+                        .imm = @truncate(total_stack_size), // +16 for x29 and x30
                         .S = false,
                         .op = 0,
                     },
@@ -633,9 +755,20 @@ pub const CodeGenerator = struct {
                 }
             },
             else => {
-                const old_registers = self.registers;
+                const start_reloc = self.reloc_buffer.items.len;
+                const start_index = self.builder.currentOffset();
                 const result = try self.genNodeExpr(nidx, null);
-                self.registers = old_registers;
+                // Must remove last relocation
+                switch (result) {
+                    .reloc_offset => {
+                        self.reloc_buffer.items.len = start_reloc;
+                    },
+                    .reloc_label => {
+                        self.reloc_buffer.items.len = start_reloc;
+                        self.builder.restoreOffset(start_index);
+                    },
+                    else => {},
+                }
                 return result;
             },
         }
@@ -711,6 +844,15 @@ pub const CodeGenerator = struct {
         }
     }
 
+    pub fn isInvokeeBuiltin(self: *Self, nidx: NodeIndex) bool {
+        const node = &self.unit.nodes.items[nidx];
+        if (node.kind == .identifier) {
+            const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
+            return BuiltinsCodeGen.map.has(ident_str);
+        }
+        return false;
+    }
+
     pub fn genNodeExpr(self: *Self, nidx: NodeIndex, result_ty: ?Type) !Value {
         // _ = result_ty;
         const node = &self.unit.nodes.items[nidx];
@@ -732,7 +874,7 @@ pub const CodeGenerator = struct {
                 var symbol_value_buffer = std.ArrayList(u8).init(self.unit.allocator);
                 try std.fmt.format(symbol_value_buffer.writer(), ".cstr{}", .{self.symbols.count()});
                 const sym_index = self.symbols.count();
-                try self.symbols.put(symbol_value_buffer.items, Symbol{
+                try self.insertSymbol(symbol_value_buffer.items, Symbol{
                     .reloc_ty = .variable,
                     .address = @truncate(offset),
                     .section = 4,
@@ -740,6 +882,7 @@ pub const CodeGenerator = struct {
                         .external = true,
                         .ty = .section,
                     },
+                    .uses = 1,
                 });
 
                 try self.reloc_buffer.append(std.macho.relocation_info{
@@ -765,7 +908,7 @@ pub const CodeGenerator = struct {
 
                 return .{
                     .reloc_offset = .{
-                        .offset = @truncate(sym_index),
+                        .offset = @intCast(sym_index),
                         .register = out_reg,
                     },
                 };
@@ -778,8 +921,11 @@ pub const CodeGenerator = struct {
                 // const out_reg = self.availableRegister().?;
                 // self.useRegister(out_reg);
 
-                const referred_nidx = self.unit.node_to_node.get(nidx).?;
                 const str = self.unit.identifierAt(@bitCast(node.data.two.a));
+                if (BuiltinsCodeGen.map.get(str)) |fptr| {
+                    return .{ .builtin = fptr };
+                }
+                const referred_nidx = self.unit.node_to_node.get(nidx).?;
 
                 if (self.fctx.?.local_offsets.get(referred_nidx)) |vr| {
                     return .{
@@ -790,8 +936,9 @@ pub const CodeGenerator = struct {
                     };
                 } else if (self.symbols.getIndex(str)) |sym_index| {
                     const sym = self.symbols.values()[sym_index];
+                    const new_sym_index = try self.incUsage(sym_index);
                     try self.reloc_buffer.append(std.macho.relocation_info{
-                        .r_symbolnum = @truncate(sym_index),
+                        .r_symbolnum = @truncate(new_sym_index),
                         .r_address = @intCast(self.builder.currentOffsetInSection(self.segment_offset, 0)),
                         .r_extern = 1,
                         .r_length = 2,
@@ -820,7 +967,7 @@ pub const CodeGenerator = struct {
                             }));
                             return .{
                                 .reloc_offset = .{
-                                    .offset = @truncate(sym_index),
+                                    .offset = @intCast(new_sym_index),
                                     .register = out_reg,
                                 },
                             };
@@ -902,7 +1049,7 @@ pub const CodeGenerator = struct {
                             .memory_offset => |mo| {
                                 return .{
                                     .memory_offset = .{
-                                        .offset = mo.offset + field_offset,
+                                        .offset = mo.offset + @as(i32, @intCast(field_offset)),
                                         .register = mo.register,
                                     },
                                 };
@@ -920,7 +1067,7 @@ pub const CodeGenerator = struct {
 
                                 if (lvalue == .reloc_offset) {
                                     try self.reloc_buffer.append(std.macho.relocation_info{
-                                        .r_symbolnum = @truncate(mo.offset),
+                                        .r_symbolnum = @intCast(mo.offset),
                                         .r_address = @intCast(self.builder.currentOffsetInSection(self.segment_offset, 0)),
                                         .r_extern = 1,
                                         .r_length = 2,
@@ -931,7 +1078,7 @@ pub const CodeGenerator = struct {
                                 }
 
                                 if (ty.isIntegral()) {
-                                    _ = try self.writeInst(formStore(ty, rrvalue.register, mo.register, mo.offset));
+                                    _ = try self.writeInst(try self.formStore(ty, rrvalue.register, mo.register, mo.offset));
                                 } else {
                                     @panic("todo");
                                 }
@@ -1025,6 +1172,9 @@ pub const CodeGenerator = struct {
             },
             .invoke => {
                 const invokee_val = try self.genNodeExpr(node.data.two.a, null);
+                if (invokee_val == .builtin) {
+                    return invokee_val.builtin(self, &.{});
+                }
                 self.fctx.?.sub_invocations += 1;
 
                 switch (invokee_val) {
@@ -1043,6 +1193,10 @@ pub const CodeGenerator = struct {
                 return .{ .register = X0 };
             },
             .invoke_one_arg => {
+                if (self.isInvokeeBuiltin(node.data.two.a)) {
+                    const invokee_val = try self.genNodeExpr(node.data.two.a, null);
+                    return invokee_val.builtin(self, &.{node.data.two.b});
+                }
                 self.fctx.?.sub_invocations += 1;
                 const fn_type = self.unit.node_to_type.get(node.data.two.a).?;
                 const param_types = self.unit.interner.getMultiTypes(fn_type.kind.func.params);
@@ -1076,8 +1230,12 @@ pub const CodeGenerator = struct {
                 return .{ .register = X0 };
             },
             .invoke_args => {
-                self.fctx.?.sub_invocations += 1;
                 const invokee_index = Node.absoluteIndex(nidx, node.data.four.a);
+                if (self.isInvokeeBuiltin(invokee_index)) {
+                    const invokee_val = try self.genNodeExpr(invokee_index, null);
+                    return invokee_val.builtin(self, self.unit.node_ranges.items[node.data.two.b..node.data.two.b+node.data.four.b]);
+                }
+                self.fctx.?.sub_invocations += 1;
                 const fn_type = self.unit.node_to_type.get(invokee_index).?;
                 const param_types = self.unit.interner.getMultiTypes(fn_type.kind.func.params);
 
@@ -1129,9 +1287,9 @@ pub const CodeGenerator = struct {
                     const arg_val = try pre_arg_val.getValue(self, arg_ty, null, true, false);
                     try self.writeLoadArg(arg_val, arg_ty, temp_reg);
 
-                    _ = try self.writeInst(formStore(arg_ty, temp_reg, SP, stack_offset));
+                    _ = try self.writeInst(try self.formStore(arg_ty, temp_reg, SP, @intCast(stack_offset)));
 
-                    stack_offset += layout.max();
+                    stack_offset += @intCast(layout.max());
                 }
                 self.fctx.?.max_additional_stack = @max(self.fctx.?.max_additional_stack, stack_offset);
 
@@ -1189,7 +1347,7 @@ pub const CodeGenerator = struct {
                         return .{
                             .memory_offset = .{
                                 .register = ptr_val.register,
-                                .offset = @as(u32, @truncate(val)) * elem_layout.size,
+                                .offset = @as(i32, @intCast(val)) * @as(i32, @intCast(elem_layout.size)),
                             },
                         };
 
@@ -1301,7 +1459,7 @@ pub const CodeGenerator = struct {
                 // }
                 // return .{ .register = out_reg };
             },
-            else => std.log.warn("Skipping node {}", .{nidx}),
+            else => std.log.warn("Skipping node {} kind: {}", .{ nidx, self.unit.nodes.items[nidx].kind }),
         }
 
         return .{ .inst = 0 };
@@ -1444,15 +1602,12 @@ pub const CodeGenerator = struct {
                 const base_layout = self.computeLayout(arr.base);
                 break :blk .{ .size = base_layout.size * @as(u32, @truncate(arr.size)), .alignment = base_layout.alignment };
             },
-            .@"struct", .unnamed_struct => blk: {
+            .array_unsized => .{ .size = 8, .alignment = 8 },
+            .@"struct", .unnamed_struct, .builtin_struct => blk: {
                 const fields = switch (ty.kind) {
                     .@"struct" => |st| self.unit.interner.getMultiTypes(st.fields),
                     .unnamed_struct => |st| self.unit.interner.getMultiTypes(st.fields),
-                    else => unreachable,
-                };
-                const nidx = switch (ty.kind) {
-                    .@"struct" => |st| st.nidx,
-                    .unnamed_struct => |st| st.nidx,
+                    .builtin_struct => |st| self.unit.interner.getMultiTypes(st.fields),
                     else => unreachable,
                 };
                 var field_offsets = std.AutoHashMap(u32, u32).init(self.unit.allocator);
@@ -1482,14 +1637,25 @@ pub const CodeGenerator = struct {
                     }
                 }
 
-                self.structs.put(nidx, .{ .offsets = field_offsets }) catch @panic("oom");
+                switch (ty.kind) {
+                    .@"struct" => |st| {
+                        self.structs.put(st.nidx, .{ .offsets = field_offsets }) catch @panic("oom");
+                    },
+                    .unnamed_struct => |st| {
+                        self.structs.put(st.nidx, .{ .offsets = field_offsets }) catch @panic("oom");
+                    },
+                    .builtin_struct => {},
+                    else => unreachable,
+                }
+
                 offset = std.mem.alignForward(u32, offset, largest_alignment);
                 break :blk .{ .size = offset, .alignment = largest_alignment };
             },
-            .@"union", .unnamed_union => blk: {
+            .@"union", .unnamed_union, .builtin_union => blk: {
                 const fields = switch (ty.kind) {
                     .@"union" => |st| self.unit.interner.getMultiTypes(st.variants),
                     .unnamed_union => |st| self.unit.interner.getMultiTypes(st.variants),
+                    .builtin_union => |st| self.unit.interner.getMultiTypes(st.variants),
                     else => unreachable,
                 };
                 var largest_alignment: u32 = 0;
@@ -1520,7 +1686,9 @@ pub const CodeGenerator = struct {
                 largest_size = std.mem.alignForward(u32, largest_size, largest_alignment);
                 break :blk .{ .size = largest_size, .alignment = largest_alignment };
             },
-            else => @panic("umm"),
+            else => std.debug.panic("unable to calculate memory layout of type {s}", .{
+                self.unit.interner.printTyToStr(ty, self.allocator),
+            }),
         };
     }
 
@@ -1579,7 +1747,7 @@ pub const CodeGenerator = struct {
         unreachable;
     }
 
-    pub fn writeCastLoad(self: *Self, ty: Type, result_ty: Type, out_reg: u5, offset_reg: u5, offset: u32) !void {
+    pub fn writeCastLoad(self: *Self, ty: Type, result_ty: Type, out_reg: u5, offset_reg: u5, offset: i32) !void {
         if (ty == result_ty) {
             _ = try self.writeInst(formLoad(ty, out_reg, offset_reg, offset));
             return;
@@ -1594,7 +1762,7 @@ pub const CodeGenerator = struct {
                 else => unreachable,
             };
             var opc: u2 = 0b01;
-            const div = @as(u32, 1) << sz;
+            const div = @as(i32, 1) << sz;
             if (ty.isSigned() and result_ty.rank() > ty.rank()) {
                 if (result_ty.rank() > self.unit.interner.intTy(false, 0).rank()) {
                     opc = 0b10;
@@ -1605,16 +1773,31 @@ pub const CodeGenerator = struct {
                 sz = 0b11;
             }
 
-            _ = try self.writeInst(loadStore(.load_store_register, 0, 0b10, 0, 0, .{
-                .szVopcimm12rnrt = .{
-                    .rt = out_reg,
-                    .rn = offset_reg,
-                    .imm = @truncate(offset / div),
-                    .opc = opc,
-                    .V = false,
-                    .sz = sz,
-                },
-            }));
+            if (OPS.fitsIn(.szVopcimm9RnRt, .imm, offset)) {
+                // store unsacled immediate
+                _ = try self.writeInst(loadStore(.load_store_register, 0, 0b00, 0, 0, .{
+                    .szVopcimm9RnRt = .{
+                        .rt = out_reg,
+                        .rn = offset_reg,
+                        .imm = @truncate(offset),
+                        .opc = opc,
+                        .V = false,
+                        .sz = sz,
+                    },
+                }));
+            } else if (OPS.fitsIn(.szVopcimm12rnrt, .imm, @divTrunc(offset, div))) {
+                // store unsigned immediate
+                _ = try self.writeInst(loadStore(.load_store_register, 0, 0b10, 0, 0, .{
+                    .szVopcimm12rnrt = .{
+                        .rt = out_reg,
+                        .rn = offset_reg,
+                        .imm = @intCast(@divTrunc(offset, div)),
+                        .opc = opc,
+                        .V = false,
+                        .sz = sz,
+                    },
+                }));
+            } else @panic("todo");
 
             return;
         }
@@ -1635,186 +1818,126 @@ pub const CodeGenerator = struct {
         unreachable;
     }
 
-    pub fn writeCastLoad2(self: *Self, ty: Type, result_ty: Type, out_reg: u5, offset_reg: u5, offset: u32) !u32 {
-        if (ty == result_ty) return formLoad(ty, out_reg, offset_reg, offset);
-        if (ty.isIntegral() and result_ty.isIntegral()) {
-            var sz: u2 = 0;
-            var div: u32 = 1;
-            var opc: u2 = undefined;
-            if (ty.isSigned() == result_ty.isSigned()) {
-                if (ty.rank() < result_ty.rank()) {
-                    switch (ty.kind) {
-                        .char => {
-                            sz = 0b00;
-                            if (ty.kind.char) {
-                                if (result_ty.rank() > self.unit.interner.intTy(false, 0).rank()) {
-                                    opc = 0b10; // 64-bit
-                                } else {
-                                    opc = 0b11; // 32-bit
-                                }
-                            } else {
-                                opc = 0b01;
-                            }
-                        },
-                        .short => {
-                            sz = 0b01;
-                            div = 2;
-                            if (ty.kind.short) {
-                                if (result_ty.rank() > self.unit.interner.intTy(false, 0).rank()) {
-                                    opc = 0b10; // 64-bit
-                                } else {
-                                    opc = 0b11; // 32-bit
-                                }
-                            } else {
-                                opc = 0b01;
-                            }
-                        },
-                        .int => {
-                            sz = 0b10;
-                            div = 4;
-                            if (ty.kind.int and result_ty.rank() > self.unit.interner.intTy(false, 0).rank()) {
-                                opc = 0b10; // 64-bit ldrsw
-                            } else {
-                                opc = 0b01;
-                            }
-                        },
-                        .long => {
-                            sz = 0b10;
-                            div = 8;
-                        },
-                        .longlong => {
-                            sz = 0b10;
-                            div = 8;
-                        },
-                        else => unreachable,
-                    }
-                    return try self.writeInst(loadStore(.load_store_register, 0, 0b10, 0, 0, .{
-                        .szVopcimm12rnrt = .{
-                            .rt = out_reg,
-                            .rn = offset_reg,
-                            .imm = @truncate(offset / div),
-                            .opc = opc,
-                            .V = false,
-                            .sz = sz,
+    pub fn formLoad(ty: Type, out_reg: u5, offset_reg: u5, offset: i32) u32 {
+        const sz: u2, const divide: i32 = switch (ty.kind) {
+            .char => .{ 0b00, 1 },
+            .short => .{ 0b01, 2 },
+            .int => .{ 0b10, 4 },
+            .long => .{ 0b11, 8 },
+            .longlong => .{ 0b11, 8 },
+            .pointer => .{ 0b11, 8 },
+            else => unreachable,
+        };
+
+        if (OPS.fitsIn(.szVopcimm9RnRt, .imm, offset)) {
+            // store unsacled immediate
+            return loadStore(.load_store_register, 0, 0b00, 0, 0, .{
+                .szVopcimm9RnRt = .{
+                    .rt = out_reg,
+                    .rn = offset_reg,
+                    .imm = @truncate(offset),
+                    .opc = 0b01,
+                    .V = false,
+                    .sz = sz,
+                },
+            });
+        } else if (OPS.fitsIn(.szVopcimm12rnrt, .imm, @divTrunc(offset, divide))) {
+            // store unsigned immediate
+            return loadStore(.load_store_register, 0, 0b10, 0, 0, .{
+                .szVopcimm12rnrt = .{
+                    .rt = out_reg,
+                    .rn = offset_reg,
+                    .imm = @intCast(@divTrunc(offset, divide)),
+                    .opc = 0b01,
+                    .V = false,
+                    .sz = sz,
+                },
+            });
+        } else @panic("todo");
+    }
+
+    pub fn formStore(self: *Self, ty: Type, in_reg: u5, offset_reg: u5, offset: i32) !u32 {
+        const sz: u2, const divide: i32 = switch (ty.kind) {
+            .char => .{ 0b00, 1 },
+            .short => .{ 0b01, 2 },
+            .int => .{ 0b10, 4 },
+            .long => .{ 0b11, 8 },
+            .longlong => .{ 0b11, 8 },
+            .pointer => .{ 0b11, 8 },
+            else => unreachable,
+        };
+
+        if (OPS.fitsIn(.szVopcimm9RnRt, .imm, offset)) {
+            // store unsacled immediate
+            return loadStore(.load_store_register, 0, 0b00, 0, 0, .{
+                .szVopcimm9RnRt = .{
+                    .rt = in_reg,
+                    .rn = offset_reg,
+                    .imm = @truncate(offset),
+                    .opc = 0b00,
+                    .V = false,
+                    .sz = sz,
+                },
+            });
+        } else if (OPS.fitsIn(.szVopcimm12rnrt, .imm, offset)) {
+            // store unsigned immediate
+            return loadStore(.load_store_register, 0, 0b10, 0, 0, .{
+                .szVopcimm12rnrt = .{
+                    .rt = in_reg,
+                    .rn = offset_reg,
+                    .imm = @intCast(@divTrunc(offset, divide)),
+                    .opc = 0b00,
+                    .V = false,
+                    .sz = sz,
+                },
+            });
+        } else {
+            const new_offset_reg = self.availableRegister().?;
+            self.useRegister(new_offset_reg);
+
+            if (offset < 0) {
+                const add_sub_max: i32 = OPS.maxValue(.sfopSshimm12rnrd, .imm);
+
+                var additional_offset = -offset;
+                _ = try self.writeInst(dataProcImm(.add_sub, .{
+                    .sfopSshimm12rnrd = .{
+                        .rd = new_offset_reg,
+                        .rn = offset_reg,
+                        .imm = @intCast(@min(add_sub_max, additional_offset)),
+                        .S = false,
+                        .op = 1,
+                    },
+                }));
+                additional_offset -= @min(add_sub_max, additional_offset);
+
+                while (additional_offset > 0) {
+                    _ = try self.writeInst(dataProcImm(.add_sub, .{
+                        .sfopSshimm12rnrd = .{
+                            .rd = new_offset_reg,
+                            .rn = new_offset_reg,
+                            .imm = @intCast(@min(add_sub_max, additional_offset)),
+                            .S = false,
+                            .op = 1,
                         },
                     }));
-                } else {
-                    opc = 0b01;
-                    switch (ty.kind) {
-                        .char => {
-                            sz = 0b00;
-                        },
-                        .short => {
-                            sz = 0b01;
-                            div = 2;
-                        },
-                        .int => {
-                            sz = 0b10;
-                            div = 4;
-                        },
-                        .long => {
-                            sz = 0b10;
-                            div = 8;
-                        },
-                        .longlong => {
-                            sz = 0b10;
-                            div = 8;
-                        },
-                        else => unreachable,
-                    }
-
-                    _ = try self.writeInst(loadStore(.load_store_register, 0, 0b10, 0, 0, .{
-                        .szVopcimm12rnrt = .{
-                            .rt = out_reg,
-                            .rn = offset_reg,
-                            .imm = @truncate(offset / div),
-                            .opc = opc,
-                            .V = false,
-                            .sz = sz,
-                        },
-                    }));
-
-                    if (result_ty.rank() < self.unit.interner.intTy(true, 0).rank()) {
-                        _ = try self.writeInst(dataProcImm(.bitfield, .{
-                            .sfopcNimmrimmsRnRd = .{
-                                .rd = out_reg,
-                                .rn = out_reg,
-                                .imms = 0b000111,
-                                .immr = 0b000000,
-                                .N = 1,
-                                .opc = 0,
-                                .sf = ty.rank() > self.unit.interner.intTy(true, 0).rank(),
-                            },
-                        }));
-                    }
-                    return 0;
+                    additional_offset -= @min(add_sub_max, additional_offset);
                 }
-            } else if (!ty.isSigned() and ty.rank() >= result_ty.rank()) {
-                // break :blk ty;
-                unreachable;
-            } else if (!result_ty.isSigned() and result_ty.rank() >= ty.rank()) {
-                // break :blk result_ty;
-                unreachable;
-            } else if (ty.isSigned()) {
-                // const new_type = self.unit.interner.createOrGetTyKind(ty.toSigned(false));
-                // break :blk new_type;
-                unreachable;
-            } else if (result_ty.isSigned()) {
-                // const new_type = self.unit.interner.createOrGetTyKind(result_ty.toSigned(false));
-                // break :blk new_type;
-                unreachable;
+            } else {
+                @panic("todo");
             }
+
+            // store unsigned immediate
+            return loadStore(.load_store_register, 0, 0b10, 0, 0, .{
+                .szVopcimm12rnrt = .{
+                    .rt = in_reg,
+                    .rn = new_offset_reg,
+                    .imm = 0,
+                    .opc = 0b00,
+                    .V = false,
+                    .sz = sz,
+                },
+            });
         }
-        unreachable;
-    }
-
-    pub fn formLoad(ty: Type, out_reg: u5, offset_reg: u5, offset: u32) u32 {
-        // const out_reg = self.availableRegister().?;
-        // self.useRegister(out_reg);
-
-        const sz: u2, const divide: u32 = switch (ty.kind) {
-            .char => .{ 0b00, 1 },
-            .short => .{ 0b01, 2 },
-            .int => .{ 0b10, 4 },
-            .long => .{ 0b11, 8 },
-            .longlong => .{ 0b11, 8 },
-            .pointer => .{ 0b11, 8 },
-            else => unreachable,
-        };
-
-        return loadStore(.load_store_register, 0, 0b10, 0, 0, .{
-            .szVopcimm12rnrt = .{
-                .rt = out_reg,
-                .rn = offset_reg,
-                .imm = @truncate(offset / divide),
-                .opc = 0b01,
-                .V = false,
-                .sz = sz,
-            },
-        });
-    }
-
-    pub fn formStore(ty: Type, in_reg: u5, offset_reg: u5, offset: u32) u32 {
-        const sz: u2, const divide: u32 = switch (ty.kind) {
-            .char => .{ 0b00, 1 },
-            .short => .{ 0b01, 2 },
-            .int => .{ 0b10, 4 },
-            .long => .{ 0b11, 8 },
-            .longlong => .{ 0b11, 8 },
-            .pointer => .{ 0b11, 8 },
-            else => unreachable,
-        };
-
-        return loadStore(.load_store_register, 0, 0b10, 0, 0, .{
-            .szVopcimm12rnrt = .{
-                .rt = in_reg,
-                .rn = offset_reg,
-                .imm = @truncate(offset / divide),
-                .opc = 0b00,
-                .V = false,
-                .sz = sz,
-            },
-        });
     }
 
     pub fn loadStore(op0: enum(u4) {
@@ -1931,14 +2054,16 @@ pub const CodeGenerator = struct {
             _2: u1 = 0,
             sf: bool,
         },
-        szopcimm9RnRt: packed struct(u32) {
+        szVopcimm9RnRt: packed struct(u32) {
             rt: u5,
             rn: u5,
             _1: u2 = 0,
-            imm9: u9,
+            imm: i9,
             _2: u1 = 0,
             opc: u2,
-            _3: u6 = 0,
+            _3: u2 = 0,
+            V: bool,
+            _4: u3 = 0,
             sz: u2,
         },
         sfopcNimmrimmsRnRd: packed struct(u32) {
@@ -1980,6 +2105,54 @@ pub const CodeGenerator = struct {
             _2: u3 = 0,
             opc: u2,
         },
+
+        pub fn maxValue(
+            comptime field: std.meta.FieldEnum(OPS),
+            comptime sub_field: std.meta.FieldEnum(std.meta.FieldType(OPS, field)),
+        ) comptime_int {
+            const FieldType = std.meta.FieldType(std.meta.FieldType(OPS, field), sub_field);
+            return std.math.maxInt(FieldType);
+        }
+
+        pub fn fitsIn(
+            comptime field: std.meta.FieldEnum(OPS),
+            comptime sub_field: std.meta.FieldEnum(std.meta.FieldType(OPS, field)),
+            value: anytype,
+        ) bool {
+            const FieldType = std.meta.FieldType(std.meta.FieldType(OPS, field), sub_field);
+            const field_info = @typeInfo(FieldType);
+            const ValueType = @TypeOf(value);
+            const value_info = @typeInfo(ValueType);
+            if (value_info != .int) @compileError("Expected value to be integer!");
+            if (field_info != .int) @compileError("Expected field to be integer!");
+
+            if (ValueType == FieldType) return true
+            else if (value_info.int.signedness == field_info.int.signedness) {
+                std.log.info(" value {}", .{value});
+                if (value_info.int.bits < field_info.int.bits) {
+                    return true;
+                } else if (value_info.int.signedness == .signed) {
+                    if (value > 0) {
+                        return value < std.math.maxInt(FieldType);
+                    } else {
+                        return value > std.math.minInt(FieldType);
+                    }
+                } else {
+                    return value < std.math.maxInt(FieldType);
+                }
+            } else if (value_info.int.signedness == .unsigned and field_info.int.signedness == .signed) {
+                std.log.info(" value {}", .{value});
+                if (value_info.int.bits < field_info.int.bits) {
+                    return true;
+                } else {
+                    return (value >> (value_info.int.bits - 1) == 0);
+                }
+            } else {
+                std.log.info("signed value {}", .{value});
+                if (value < 0) return false
+                else return value < std.math.maxInt(FieldType);
+            }
+        }
         // szVRmoptSRnRt: packed struct(u32) {
         //     rt: u5,
         //     rn: u5,
@@ -2046,6 +2219,9 @@ pub const CodeGenerator = struct {
         var sym_it = self.symbols.iterator();
         _ = try self.builder.writeInt(@as(u8, 0));
         while (sym_it.next()) |sym| {
+            // Since unsued symbols are all at the end of the array map, we can early-exit
+            // as we don't need to write unused symbols
+            if (sym.value_ptr.uses == 0) break;
             _ = try self.builder.writeInt(@as(u8, '_'));
             _ = try self.builder.writeSlice(sym.key_ptr.*);
             _ = try self.builder.writeInt(@as(u8, 0));
@@ -2056,6 +2232,9 @@ pub const CodeGenerator = struct {
         var next_offset: u32 = 1;
         const syms_offset = self.builder.currentOffset();
         while (sym_it.next()) |sym| {
+            // Since unsued symbols are all at the end of the array map, we can early-exit
+            // as we don't need to write unused symbols
+            if (sym.value_ptr.uses == 0) break;
             const offset = try self.builder.writeSymbolEntry(self.symtab_offset, next_offset, sym.value_ptr.macho_ty);
             self.builder.ptrTo(std.macho.nlist_64, offset).n_sect = @truncate(sym.value_ptr.section);
             if (sym.value_ptr.section > 0) {
@@ -2065,7 +2244,7 @@ pub const CodeGenerator = struct {
         }
 
         self.builder.ptrTo(std.macho.symtab_command, self.symtab_offset).symoff = syms_offset;
-        self.builder.ptrTo(std.macho.symtab_command, self.symtab_offset).nsyms = @truncate(self.symbols.count());
+        self.builder.ptrTo(std.macho.symtab_command, self.symtab_offset).nsyms = self.zero_use_symbol_index;
         self.builder.ptrTo(std.macho.symtab_command, self.symtab_offset).stroff = str_offset;
         self.builder.ptrTo(std.macho.symtab_command, self.symtab_offset).strsize = str_len;
 
@@ -2242,6 +2421,10 @@ pub const MachoBuilder = struct {
 
     pub inline fn currentOffset(self: *const Self) u32 {
         return @truncate(self.buffer.items.len);
+    }
+
+    pub inline fn restoreOffset(self: *Self, offset: u32) void {
+        self.buffer.items.len = offset;
     }
 
     pub inline fn currentOffsetInSection(self: *Self, segment_offset: u32, sect: u32) u32 {

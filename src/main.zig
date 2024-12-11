@@ -75,7 +75,7 @@ pub fn main() !void {
                             \\InstalledDir: /Users/oliverclarke/Documents/dev/cp/zig-out/bin
                         ;
                         std.debug.print("{s}\n", .{version});
-                       return;
+                        return;
                     },
                     else => std.log.warn("Unused argument {s}", .{arg}),
                 }
@@ -604,19 +604,20 @@ pub fn main() !void {
                 std.log.info("File {s} {}", .{ file.file_path, file.tokens.items.len });
             }
         }
+        std.debug.print("\x1b[1;32mFinished Compiling\x1b[0m\n", .{});
         return;
     }
 
     var parser = Parser.init(&unit, &tokenizer);
     const unit_range = try parser.parseUnit();
-    std.log.info("Range: {}-{}", .{ unit_range.start, unit_range.count });
 
     const stdout = std.io.getStdOut();
     var writer = stdout.writer();
     try writer.print("Unit\n", .{});
     for (0..unit_range.count) |i| {
         const node_index = unit.node_ranges.items[i + unit_range.start];
-        try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, false, writer);
+        _ = node_index;
+        // try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, false, writer);
     }
 
     var typechecker = TypeChecker.init(&unit);
@@ -643,6 +644,8 @@ pub fn main() !void {
         try codegen.writeToFile(output_file orelse "a.out");
     }
 
+
+    std.debug.print("\x1b[1;32mFinished Compiling\x1b[0m\n", .{});
     // builder.write
 
     // while (tokenizer.next()) |token_index| {

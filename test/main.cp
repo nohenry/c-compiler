@@ -1,22 +1,18 @@
+// #include <iconv.h>
+#include <stdarg.h>
 
-// #define __QOS_ENUM(name) typedef name foo;
+int args(const char *c, ...) {
+    va_list v;
+    va_start(v, c);
+    va_arg(v, int);
+    return 34;
+}
 
-// __QOS_ENUM(foobar);
-// #define __QOS_ENUM(name) typedef name  foo
-// #define F(...) __VA_ARG__
-enum { a = 4, f = 3 };
-
-#define a1(y) (y+2)
-#define a2(y) a1(y)+1
-#define f a+f
-
-// int m;
-// int m1 = 2;
-int printf(const char *c, ...);
-
-#define FOO(x) #x
-
-int main() {
-    printf("bruh" FOO(hello ) "fooar\n");
-    return 0;
+int main()
+{
+    return args("fd", 23);
+    // cd = iconv_open ("IBM1047", "UTF-8");
+    // if (cd == (iconv_t) -1)
+    //     return 1;
+    // return 0;
 }

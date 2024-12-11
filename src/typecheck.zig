@@ -8,6 +8,42 @@ const TokenKind = @import("tokenizer.zig").TokenKind;
 const TokenIndex = @import("tokenizer.zig").TokenIndex;
 const TypeQualifier = @import("parser.zig").TypeQualifier;
 
+pub const BuiltinsType = struct {
+    pub const map = std.StaticStringMap(*const fn (*Unit) (std.mem.Allocator.Error)!Type).initComptime(blk: {
+        const decls = @typeInfo(BuiltinsType).@"struct".decls;
+        var result: [decls.len - 1]struct { []const u8, (*const fn (*Unit) (std.mem.Allocator.Error)!Type) } = undefined;
+        for (decls, 0..) |decl, i| {
+            if (std.mem.eql(u8, decl.name, "map")) {
+                continue;
+            }
+            result[i - 1][0] = decl.name;
+            result[i - 1][1] = @field(BuiltinsType, decl.name);
+        }
+        break :blk &result;
+    });
+
+    pub fn __builtin_va_list(unit: *Unit) !Type {
+        const value = "__builtin_va_list";
+        return unit.interner.builtinStructTy(@intFromPtr(value), &.{
+            unit.interner.pointerTy(unit.interner.intTy(false, 0), 0),
+        }, 0);
+    }
+
+    pub fn __builtin_va_start(unit: *Unit) !Type {
+        return unit.interner.funcTy(&.{
+            try __builtin_va_list(unit),
+            unit.interner.anyTy(),
+        }, unit.interner.voidTy(), false);
+    }
+
+    pub fn __builtin_va_arg(unit: *Unit) !Type {
+        return unit.interner.funcTy(&.{
+            try __builtin_va_list(unit),
+            unit.interner.anyKindTy(.@"type"),
+        }, unit.interner.voidTy(), false);
+    }
+};
+
 pub const TypeChecker = struct {
     unit: *Unit,
 
@@ -29,7 +65,7 @@ pub const TypeChecker = struct {
             },
             .string_literal_join => {
                 const length = self.unit.stringLength(@bitCast(node.data.two.b));
-                return try @call(.always_tail, getStringJoinLength, .{self, node.data.two.a, length + len});
+                return try @call(.always_tail, getStringJoinLength, .{ self, node.data.two.a, length + len });
             },
             else => unreachable,
         }
@@ -565,21 +601,22 @@ pub const TypeChecker = struct {
                 }
 
                 if (expr_type.kind == .pointer and to_type.kind == .pointer) {
-                    return to_type;
+                    break :blk to_type;
                 } else if (expr_type.isIntegral() and to_type.kind == .pointer) {
-                    return to_type;
+                    break :blk to_type;
                 } else if (expr_type.kind == .pointer and to_type.isIntegral()) {
-                    return to_type;
+                    break :blk to_type;
                 }
 
-                std.debug.panic("Can't cast to type \x1b[1m{s}\x1b[0m", .{
+                std.debug.panic("Can't cast value of type \x1b[1m{s}\x1b[0m to type \x1b[1m{s}\x1b[0m", .{
                     self.unit.interner.printTyToStr(expr_type, self.unit.allocator),
+                    self.unit.interner.printTyToStr(to_type, self.unit.allocator),
                 });
             },
             .if_statement => {
                 const condition_type = try self.checkNode(node.data.two.a, null);
                 if (!condition_type.isScalar()) {
-                    std.debug.panic("Expected integral type in while condition!", .{});
+                    std.debug.panic("Expected integral type in if condition!", .{});
                 }
 
                 _ = try self.checkNode(node.data.two.b, null);
@@ -589,7 +626,7 @@ pub const TypeChecker = struct {
             .if_statement_no_body => {
                 const condition_type = try self.checkNode(node.data.two.a, null);
                 if (!condition_type.isScalar()) {
-                    std.debug.panic("Expected integral type in while condition!", .{});
+                    std.debug.panic("Expected integral type in if condition!", .{});
                 }
 
                 return self.unit.interner.voidTy();
@@ -597,7 +634,7 @@ pub const TypeChecker = struct {
             .if_statement_else => {
                 const condition_type = try self.checkNode(node.data.two.a, null);
                 if (!condition_type.isScalar()) {
-                    std.debug.panic("Expected integral type in while condition!", .{});
+                    std.debug.panic("Expected integral type in if condition!", .{});
                 }
 
                 _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.c), null);
@@ -608,7 +645,7 @@ pub const TypeChecker = struct {
             .if_statement_no_body_else => {
                 const condition_type = try self.checkNode(node.data.two.a, null);
                 if (!condition_type.isScalar()) {
-                    std.debug.panic("Expected integral type in while condition!", .{});
+                    std.debug.panic("Expected integral type in if condition!", .{});
                 }
                 _ = try self.checkNode(node.data.two.b, null);
 
@@ -733,6 +770,9 @@ pub const TypeChecker = struct {
             .identifier => blk: {
                 const ident_index = node.data.two.a;
                 const ident_str = self.unit.identifierAt(@bitCast(ident_index));
+                if (BuiltinsType.map.get(ident_str)) |ty| {
+                    break :blk try ty(self.unit);
+                }
                 const sym = self.unit.symbol_table.searchSymbol(ident_str) orelse {
                     std.debug.panic("Undefined identifier \x1b[1m{s}\x1b[0m", .{ident_str});
                 };
@@ -768,6 +808,10 @@ pub const TypeChecker = struct {
                 self.unit.symbol_table.putSymbol(ident_str, .{ .nidx = nidx });
                 const var_type = try self.checkNodeType(type_index);
                 const init_type = try self.checkNode(init_index, var_type);
+                if (init_type.isIncomplete()) {
+                    std.debug.panic("Variable has incomplete type! (Attempted to use struct or union before it was declared)", .{});
+                }
+
                 if (self.implicitlyCast(init_type, var_type)) |new_type| {
                     self.unit.declared_type.put(nidx, new_type) catch @panic("OOM");
 
@@ -787,6 +831,10 @@ pub const TypeChecker = struct {
                 self.unit.symbol_table.putSymbol(ident_str, .{ .nidx = nidx });
                 const var_type = try self.checkNodeType(type_index);
                 self.unit.declared_type.put(nidx, var_type) catch @panic("OOM");
+
+                if (var_type.isIncomplete()) {
+                    std.debug.panic("Variable has incomplete type! (Attempted to use struct or union before it was declared)", .{});
+                }
 
                 return self.unit.interner.voidTy();
             },
@@ -831,22 +879,49 @@ pub const TypeChecker = struct {
 
                 return self.unit.interner.voidTy();
             },
-            .@"struct",
-            .struct_ident,
-            .struct_forward,
-            .@"union",
-            .union_ident,
-            .union_forward,
+            .char_type,
+            .signed_char_type,
+            .unsigned_char_type,
+            .short_type,
+            .signed_short_type,
+            .unsigned_short_type,
+            .int_type,
+            .signed_int_type,
+            .unsigned_int_type,
+            .long_type,
+            .signed_long_type,
+            .unsigned_long_type,
+            .long_long_type,
+            .signed_long_long_type,
+            .unsigned_long_long_type,
+            .float_type,
+            .double_type,
+            .long_double_type,
+            .bool_type,
+            .unsigned,
+            .signed,
+            .void_type,
+            .pointer,
+            .array_type,
+            .array_type_fixed,
+            .function_type,
+            .function_type_one_parameter,
+            .function_type_parameter,
+            .parameter,
+            .parameter_ident,
+            .@"struct", .@"union",
+            .struct_ident, .union_ident,
             .@"enum",
             .enum_ident,
+            .struct_forward,
+            .union_forward,
             .enum_forward,
-            => {
-                _ = try self.checkNodeType(nidx);
-
-                return self.unit.interner.voidTy();
+            .type_name => blk: {
+                const ty = try self.checkNodeType(nidx);
+                break :blk self.unit.interner.typeTy(ty, 0);
             },
             else => {
-                std.log.warn("Skipping node {}", .{nidx});
+                std.log.warn("Skipping node {} of kind: {}", .{ nidx, self.unit.nodes.items[nidx].kind });
                 return self.unit.interner.voidTy();
             },
         };
@@ -911,6 +986,9 @@ pub const TypeChecker = struct {
                 }
 
                 const base = try self.checkNodeTypeImpl(base_type_index, &ty);
+                if (base.isIncomplete()) {
+                    std.debug.panic("Array has incomplete type! (tried to reference undefined struct or union)", .{});
+                }
 
                 if (base.kind == .pointer or base.kind == .func or base.kind == .array or base.kind == .array_unsized) {
                     break :blk base;
@@ -934,6 +1012,9 @@ pub const TypeChecker = struct {
                 }
 
                 const base = try self.checkNodeTypeImpl(base_type_index, &ty);
+                if (base.isIncomplete()) {
+                    std.debug.panic("Array has incomplete type! (tried to reference undefined struct or union)", .{});
+                }
 
                 if (base.kind == .pointer or base.kind == .func or base.kind == .array or base.kind == .array_unsized) {
                     break :blk base;
@@ -946,6 +1027,9 @@ pub const TypeChecker = struct {
             .function_type => blk: {
                 const ret_ty_index = Node.absoluteIndex(nidx, node.data.four.a);
                 const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, null);
+                if (ret_ty.isIncomplete()) {
+                    std.debug.panic("Function has incomplete return type! (tried to reference undefined struct or union)", .{});
+                }
                 var fun_ty = self.unit.interner.funcTyNoParams(ret_ty, false);
                 if (last_type) |last| {
                     const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
@@ -969,6 +1053,9 @@ pub const TypeChecker = struct {
                 const ret_ty_index = Node.absoluteIndex(nidx, node.data.four.a);
                 const param_index = Node.absoluteIndex(nidx, node.data.four.b);
                 const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, null);
+                if (ret_ty.isIncomplete()) {
+                    std.debug.panic("Function has incomplete return type! (tried to reference undefined struct or union)", .{});
+                }
 
                 var param_buf = [1]Type{undefined};
                 const param_tys, const variadic = if (self.unit.nodes.items[param_index].kind == .parameter_ellipsis) .{
@@ -977,6 +1064,9 @@ pub const TypeChecker = struct {
                 } else .{
                     blk1: {
                         param_buf[0] = try self.checkNodeTypeImpl(param_index, null);
+                        if (param_buf[0].isIncomplete()) {
+                            std.debug.panic("Function has incomplete type for argument 0! (tried to reference undefined struct or union)", .{});
+                        }
                         break :blk1 param_buf[0..1];
                     },
                     false,
@@ -1013,6 +1103,9 @@ pub const TypeChecker = struct {
                 const param_count = node.data.four.b;
                 const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, null);
                 const end_index = param_index + param_count;
+                if (ret_ty.isIncomplete()) {
+                    std.debug.panic("Function has incomplete return type! (tried to reference undefined struct or union)", .{});
+                }
 
                 var variadic = false;
                 var params = std.ArrayList(Type).init(self.unit.allocator);
@@ -1022,7 +1115,11 @@ pub const TypeChecker = struct {
                         variadic = true;
                         break;
                     }
-                    try params.append(try self.checkNodeTypeImpl(node_index, null));
+                    const param_ty = try self.checkNodeTypeImpl(node_index, null);
+                    if (param_ty.isIncomplete()) {
+                        std.debug.panic("Function has incomplete type for argument {}! (tried to reference undefined struct or union)", .{params.items.len});
+                    }
+                    try params.append(param_ty);
                 }
 
                 var fun_ty = self.unit.interner.funcTy(params.items, ret_ty, variadic);
@@ -1079,6 +1176,10 @@ pub const TypeChecker = struct {
             },
 
             .struct_ident, .union_ident => blk: {
+                // insert into sym table first for self references
+                const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
+                self.unit.symbol_table.putTypeSymbol(ident_str, .{ .nidx = nidx });
+
                 std.debug.assert(self.unit.nodes.items[nidx - 1].kind == .range);
                 const member_range = self.unit.nodes.items[nidx - 1].data;
 
@@ -1091,8 +1192,6 @@ pub const TypeChecker = struct {
                     self.unit.interner.unionTy(nidx, members.items, 0);
 
                 try self.unit.declared_type.put(nidx, result_ty);
-                const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
-                self.unit.symbol_table.putTypeSymbol(ident_str, .{ .nidx = nidx });
 
                 break :blk result_ty;
             },
@@ -1170,7 +1269,7 @@ pub const TypeChecker = struct {
                 };
 
                 try self.unit.node_to_node.put(nidx, sym.nidx);
-                return self.unit.declared_type.get(sym.nidx).?;
+                return self.unit.declared_type.get(sym.nidx) orelse self.unit.interner.tbdNidx(sym.nidx);
             },
             .union_forward => {
                 const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
@@ -1179,7 +1278,7 @@ pub const TypeChecker = struct {
                 };
 
                 try self.unit.node_to_node.put(nidx, sym.nidx);
-                return self.unit.declared_type.get(sym.nidx).?;
+                return self.unit.declared_type.get(sym.nidx) orelse self.unit.interner.tbdNidx(sym.nidx);
             },
             .enum_forward => {
                 const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
@@ -1190,9 +1289,28 @@ pub const TypeChecker = struct {
                 try self.unit.node_to_node.put(nidx, sym.nidx);
                 return self.unit.declared_type.get(sym.nidx).?;
             },
+            .type_name => blk: {
+                const ident_index = node.data.two.a;
+                const ident_str = self.unit.identifierAt(@bitCast(ident_index));
+                if (BuiltinsType.map.get(ident_str)) |ty| {
+                    break :blk try ty(self.unit);
+                }
+                const sym = self.unit.symbol_table.searchSymbol(ident_str) orelse {
+                    self.unit.printTokenInfo(@bitCast(ident_index));
+                    std.debug.panic("Undefined identifier \x1b[1m{s}\x1b[0m", .{ident_str});
+                };
+
+                self.unit.node_to_node.put(nidx, sym.nidx) catch @panic("OOM");
+
+                const declared_ty = self.unit.declared_type.get(sym.nidx) orelse {
+                    std.debug.panic("Symbol \x1b[1m{s}\x1b[0m does not have type declared with it (this is probably compiler bug)", .{ident_str});
+                };
+
+                break :blk declared_ty;
+            },
 
             else => {
-                std.log.warn("Skipping node {}", .{nidx});
+                std.log.warn("Skipping node {} of type {}", .{ nidx, self.unit.nodes.items[nidx].kind });
                 return self.unit.interner.voidTy();
             },
         };
@@ -1215,46 +1333,47 @@ pub const TypeChecker = struct {
         }) {
             const member_node_index = self.unit.node_ranges.items[index];
             const member_node = &self.unit.nodes.items[member_node_index];
+            const member_ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
+            if (member_ty.isIncomplete()) {
+                std.debug.panic("Struct/Union member has incomplete type! (tried to reference undefined struct or union)", .{});
+            }
+
             switch (member_node.kind) {
                 .member => {
-                    const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
-                    try members.append(ty);
+                    try members.append(member_ty);
                 },
                 .member_bitfield => {
-                    const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
                     const bitfield_index = Node.absoluteIndex(member_node_index, member_node.data.four.d);
                     var eval = SimpleEvaluator.init(self.unit);
                     const bitfield_value = try eval.evalNode(bitfield_index);
 
                     try members.append(self.unit.interner.createOrGetTy(.{
                         .bitfield = .{
-                            .base = ty,
+                            .base = member_ty,
                             .bits = @truncate(bitfield_value.int_value),
                         },
                     }, 0));
                 },
                 .member_ident => {
                     const member_ident_str = self.unit.identifierAt(@bitCast(member_node.data.two.a));
-                    const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
-                    try members.append(ty);
+                    try members.append(member_ty);
                     try field_mapping.put(member_ident_str, field_count);
                 },
                 .member_ident_bitfield => {
                     const member_ident_str = self.unit.identifierAt(@bitCast(member_node.data.two.a));
-                    const ty = try self.checkNodeType(Node.absoluteIndex(member_node_index, member_node.data.four.c));
                     const bitfield_index = Node.absoluteIndex(member_node_index, member_node.data.four.d);
                     var eval = SimpleEvaluator.init(self.unit);
                     const bitfield_value = try eval.evalNode(bitfield_index);
 
                     try members.append(self.unit.interner.createOrGetTy(.{
                         .bitfield = .{
-                            .base = ty,
+                            .base = member_ty,
                             .bits = @truncate(bitfield_value.int_value),
                         },
                     }, 0));
                     try field_mapping.put(member_ident_str, field_count);
                 },
-                else => {},
+                else => unreachable,
             }
         }
 
@@ -1265,6 +1384,10 @@ pub const TypeChecker = struct {
 
     pub fn implicitlyCast(self: *Self, from: Type, to: Type) ?Type {
         if (from == to)
+            return from
+        else if (to == self.unit.interner.anyTy())
+            return from
+        else if (to == self.unit.interner.anyKindTy(std.meta.activeTag(from.kind)))
             return from
         else if (from.kind == .pointer and to.kind == .pointer) {
             if (from.kind.pointer.base == to.kind.pointer.base) {

@@ -1008,7 +1008,11 @@ pub const FileTokenizer = struct {
     fn checkExpansion(self: *Self, str: []const u8) bool {
         if (self.tokenizer.unit.defines.get(str)) |def| {
             if (def.range.start.index < def.range.end.index) {
-                self.tokenizer.pushVirtual(def.range);
+                self.tokenizer.pushVirtual(.{
+                    .start = def.range.start,
+                    .end = def.range.end,
+                    .flags = def.range.flags | TokenRange.Flags.EXPANSION_TOKEN,
+                });
 
                 self.tokenizer.expansion_name_token_stack.append(def.name_tok) catch @panic("OOM");
                 self.tokenizer.disabled_macros.put(str, {}) catch @panic("OOM");
@@ -2081,6 +2085,14 @@ pub const Tokenizer = struct {
             }
         }
         return null;
+    }
+
+    pub fn printIncludeStack(self: *const Self) void {
+        var current = self.file_stack.first;
+        while (current != null) : (current = current.?.next) {
+            const file = &self.unit.files.items[current.?.data.file_index];
+            std.debug.print("Included From \x1b[1m{s}\x1b[0m", .{file.file_path});
+        }
     }
 };
 

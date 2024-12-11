@@ -7,12 +7,13 @@ const TypeQualifier = @import("parser.zig").TypeQualifier;
 pub const TypeFlags = struct {
     pub const Type = u8;
     pub const Variadic: TypeFlags.Type = (1 << 0);
+    pub const Incomplete: TypeFlags.Type = (1 << 1);
 };
 
 pub const TypeKind = struct {
     qualifiers: TypeQualifier.Type,
     flags: TypeFlags.Type = 0,
-    kind: union(enum) {
+    kind: union(enum(u32)) {
         void: void,
         char: bool,
         short: bool,
@@ -25,25 +26,34 @@ pub const TypeKind = struct {
         bool: void,
 
         pointer: struct { base: Type },
+        type: Type,
 
         array: struct { base: Type, size: usize },
         array_unsized: struct { base: Type },
 
-        unnamed_struct: struct {
-            nidx: NodeIndex,
+        builtin_struct: struct {
             fields: Type,
+            index: u64,
+        },
+        unnamed_struct: struct {
+            fields: Type,
+            nidx: NodeIndex,
         },
         @"struct": struct {
-            nidx: NodeIndex,
             fields: Type,
+            nidx: NodeIndex,
         },
         unnamed_union: struct {
-            nidx: NodeIndex,
             variants: Type,
+            nidx: NodeIndex,
+        },
+        builtin_union: struct {
+            variants: Type,
+            index: u64,
         },
         @"union": struct {
-            nidx: NodeIndex,
             variants: Type,
+            nidx: NodeIndex,
         },
         unnamed_enum: struct {
             nidx: NodeIndex,
@@ -51,6 +61,7 @@ pub const TypeKind = struct {
         @"enum": struct {
             nidx: NodeIndex,
         },
+        tbd_nidx: NodeIndex,
 
         field: struct {
             name: StringInterner.Index,
@@ -70,6 +81,11 @@ pub const TypeKind = struct {
         lvalue_ref: struct {
             base: Type,
         },
+
+        /// Internal use only. Represents any possible type.
+        /// Used in builtin functions
+        any: void,
+        any_kind: u32,
 
         multi_type: []const Type,
         multi_type_impl: MultiType,
@@ -155,6 +171,7 @@ pub const TypeKind = struct {
             .float,
             .double,
             .longdouble,
+            .bool,
             .pointer,
             => true,
             else => false,
@@ -168,6 +185,13 @@ pub const TypeKind = struct {
         };
     }
 
+    pub fn isIncomplete(self: @This()) bool {
+        return switch (self.kind) {
+            .tbd_nidx => true,
+            else => (self.qualifiers & TypeFlags.Incomplete) > 0,
+        };
+    }
+
     pub fn toSigned(self: @This(), signed: bool) @This() {
         var s = self.kind;
         switch (s) {
@@ -177,6 +201,8 @@ pub const TypeKind = struct {
         return .{ .kind = s, .qualifiers = self.qualifiers };
     }
 };
+
+const TypeKindKind = std.meta.FieldType(TypeKind, .kind);
 
 // comptime {
 //     @compileLog(@sizeOf(TypeKind));
@@ -190,9 +216,21 @@ pub const TypeMapContext = struct {
     interner: *const TypeInterner,
 
     pub fn hash(ctx: @This(), key: TypeKind) u64 {
-        _ = ctx;
         var hasher = std.hash.Wyhash.init(0);
-        std.hash.autoHashStrat(&hasher, key, .Shallow);
+        switch (key.kind) {
+            .multi_type => |vals| {
+                for (vals) |val| {
+                    std.hash.autoHashStrat(&hasher, val, .Shallow);
+                }
+            },
+            .multi_type_impl => |vals| {
+                var i: u32 = 0;
+                while (i < vals.len) : (i += 1) {
+                    std.hash.autoHashStrat(&hasher, ctx.interner.multi_types.items[vals.start + i], .Shallow);
+                }
+            },
+            else => std.hash.autoHashStrat(&hasher, key, .Shallow),
+        }
         return hasher.final();
     }
 
@@ -202,7 +240,8 @@ pub const TypeMapContext = struct {
                 if (b.kind != .multi_type_impl) return false;
                 const ind = b.kind.multi_type_impl;
 
-                return std.mem.eql(Type, vals, ctx.interner.multi_types.items[ind.start .. ind.start + ind.len]);
+                const tys = ctx.interner.multi_types.items[ind.start .. ind.start + ind.len];
+                return std.mem.eql(Type, vals, tys);
             },
             // .multi_type_keyed => |vals| {
             //     if (b.kind != .multi_type_keyed_impl) return false;
@@ -236,7 +275,7 @@ pub const TypeMap = std.HashMap(
     std.hash_map.default_max_load_percentage,
 );
 
-pub const Type = *const TypeKind;
+pub const Type = *TypeKind;
 
 pub const TypeInterner = struct {
     unit: *Unit,
@@ -304,6 +343,10 @@ pub const TypeInterner = struct {
 
     pub fn pointerTy(self: *Self, base: Type, qualifier: TypeQualifier.Type) Type {
         return self.createOrGetTy(.{ .pointer = .{ .base = base } }, qualifier);
+    }
+
+    pub fn typeTy(self: *Self, base: Type, qualifier: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{ .type = base }, qualifier);
     }
 
     pub fn rebasePointer(self: *Self, ptr_type: Type, new_base: Type) Type {
@@ -389,6 +432,16 @@ pub const TypeInterner = struct {
         }, unsized.qualifiers);
     }
 
+    pub fn builtinStructTy(self: *Self, index: u64, fields: []const Type, qualifiers: TypeQualifier.Type) Type {
+        const field_tys = self.multiTy(fields);
+        return self.createOrGetTy(.{
+            .builtin_struct = .{
+                .index = index,
+                .fields = field_tys,
+            },
+        }, qualifiers);
+    }
+
     pub fn unnamedStructTy(self: *Self, nidx: NodeIndex, fields: []const Type, qualifiers: TypeQualifier.Type) Type {
         const field_tys = self.multiTy(fields);
         return self.createOrGetTy(.{
@@ -405,6 +458,16 @@ pub const TypeInterner = struct {
             .@"struct" = .{
                 .nidx = nidx,
                 .fields = field_tys,
+            },
+        }, qualifiers);
+    }
+
+    pub fn builtinUnionTy(self: *Self, index: u32, variants: []const Type, qualifiers: TypeQualifier.Type) Type {
+        const variant_tys = self.multiTy(variants);
+        return self.createOrGetTy(.{
+            .builtin_union = .{
+                .index = index,
+                .variants = variant_tys,
             },
         }, qualifiers);
     }
@@ -443,6 +506,24 @@ pub const TypeInterner = struct {
                 .nidx = nidx,
             },
         }, qualifiers);
+    }
+
+    pub fn tbdNidx(self: *Self, nidx: NodeIndex) Type {
+        return self.createOrGetTy(.{
+            .tbd_nidx = nidx,
+        }, 0);
+    }
+
+    pub fn anyTy(self: *Self) Type {
+        return self.createOrGetTy(.{
+            .any = {},
+        }, 0);
+    }
+
+    pub fn anyKindTy(self: *Self, kind: std.meta.Tag(TypeKindKind)) Type {
+        return self.createOrGetTy(.{
+            .any_kind = @intFromEnum(kind),
+        }, 0);
     }
 
     pub fn multiTy(self: *Self, types: []const Type) Type {
@@ -528,7 +609,7 @@ pub const TypeInterner = struct {
         return buf.items;
     }
 
-    pub fn printTyWriter(self: *const Self, ty: Type, multi_struct: bool, writer: anytype) !void {
+    pub fn printTyWriter(self: *const Self, ty: *const TypeKind, multi_struct: bool, writer: anytype) !void {
         switch (ty.kind) {
             .pointer, .array, .array_unsized => {},
             else => {
@@ -589,6 +670,12 @@ pub const TypeInterner = struct {
                 }
                 try writer.print("]", .{});
             },
+            .builtin_struct => |rec| {
+                const str: [*:0]u8 = @ptrFromInt(rec.index);
+                try writer.print("struct ({s}) {{ ", .{str});
+                try self.printTyWriter(rec.fields, true, writer);
+                try writer.print("}}", .{});
+            },
             .unnamed_struct => |rec| {
                 try writer.print("struct ({}) {{ ", .{rec.nidx});
                 try self.printTyWriter(rec.fields, true, writer);
@@ -600,6 +687,11 @@ pub const TypeInterner = struct {
                 try writer.writeAll(self.unit.identifierAt(@bitCast(tok_index)));
                 try writer.print(" {{ ", .{});
                 try self.printTyWriter(rec.fields, true, writer);
+                try writer.print("}}", .{});
+            },
+            .builtin_union => |uni| {
+                try writer.print("union (builtin {}) {{ ", .{uni.index});
+                try self.printTyWriter(uni.variants, true, writer);
                 try writer.print("}}", .{});
             },
             .unnamed_union => |uni| {
@@ -623,6 +715,9 @@ pub const TypeInterner = struct {
                 const tok_index = self.unit.nodes.items[enu.nidx].data.two.a;
                 try writer.writeAll(self.unit.identifierAt(@bitCast(tok_index)));
             },
+            .tbd_nidx => |tbd| {
+                try writer.print("TBD ({})", .{tbd});
+            },
 
             .field => |fld| {
                 try self.printTyWriter(fld.ty, false, writer);
@@ -643,6 +738,20 @@ pub const TypeInterner = struct {
             .lvalue_ref => |ref| {
                 try self.printTyWriter(ref.base, false, writer);
                 try writer.print("(ref)", .{});
+            },
+            .any => try writer.print("any", .{}),
+            .any_kind => |kind| try writer.print("any_kind(.{s})", .{
+                @tagName(@as(
+                    std.meta.Tag(
+                        std.meta.FieldType(TypeKind, .kind),
+                    ),
+                    @enumFromInt(kind),
+                )),
+            }),
+            .type => |base| {
+                try writer.print("type(", .{});
+                try self.printTyWriter(base, false, writer);
+                try writer.print(")", .{});
             },
 
             .multi_type => |tys| {
@@ -713,6 +822,12 @@ pub const TypeInterner = struct {
     pub fn printTy(self: *const Self, ty: Type) void {
         const writer = std.io.getStdOut();
         self.printTyWriter(ty, writer.writer()) catch @panic("Error while printing");
+    }
+
+    pub fn replaceType(self: *Self, from: Type, to: Type) !Type {
+        from.* = to.*;
+        try self.type_map.put(to.*, from);
+        return from;
     }
 
     pub fn createOrGetTy(self: *Self, value: std.meta.FieldType(TypeKind, .kind), qualifiers: TypeQualifier.Type) Type {

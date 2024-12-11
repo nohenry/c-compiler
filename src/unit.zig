@@ -88,7 +88,7 @@ pub const Unit = struct {
         };
     }
 
-    pub inline fn filePos(self: *Unit, tidx: TokenIndex) struct { []const u8, u32 } {
+    pub inline fn filePos(self: *const Unit, tidx: TokenIndex) struct { []const u8, u32 } {
         return .{
             self.files.items[tidx.file_index].file_path,
             self.files.items[tidx.file_index].tokens.items[tidx.index].start,
@@ -235,7 +235,7 @@ pub const Unit = struct {
         return source[tok.start .. tok.start + length];
     }
 
-    pub fn tokenLength(self: *Unit, tidx: TokenIndex) u32 {
+    pub fn tokenLength(self: *const Unit, tidx: TokenIndex) u32 {
         const source = self.files.items[tidx.file_index].source;
         const tok = self.token(tidx);
         const start = tok.start;
@@ -348,7 +348,7 @@ pub const Unit = struct {
                     }
                 }
             },
-            .identifier => {
+            .identifier, .type_name => {
                 while (index < source.len) : (index += 1) {
                     switch (source[index]) {
                         'a'...'z', 'A'...'Z', '_', '0'...'9' => continue,
@@ -705,6 +705,52 @@ pub const Unit = struct {
         }
 
         return source[tok.start + 1 .. index];
+    }
+
+    pub const LineInfo = struct {
+        line: usize,
+        line_start: usize,
+        line_end: usize,
+    };
+
+    pub fn findLineInfo(self: *const Unit, tidx: TokenIndex) LineInfo {
+        const tok = self.token(tidx);
+        const file = &self.files.items[tidx.file_index];
+
+        var line: usize = 0;
+        var line_start: usize = 0;
+        var i: usize = 0;
+        while (i < tok.start) : (i += 1) {
+            switch (file.source[i]) {
+                '\n' => {
+                    line += 1;
+                    line_start = i + 1;
+                },
+                else => {},
+            }
+        }
+        while (i < file.source.len and file.source[i] != '\n') {
+            i += 1;
+        }
+
+        return .{
+            .line = line,
+            .line_start = line_start,
+            .line_end = i,
+        };
+    }
+
+    pub fn printTokenInfo(self: *const Unit, tidx: TokenIndex) void {
+        const tok = self.token(tidx);
+        const token_length = self.tokenLength(tidx);
+        const file = &self.files.items[tidx.file_index];
+        const lc = self.findLineInfo(tidx);
+
+        std.debug.print("At \x1b[1m{s}\x1b[0m line \x1b[1m{}\x1b[0m\n", .{ file.file_path, lc.line });
+        const begin = file.source[lc.line_start..tok.start];
+        const mid = file.source[tok.start..tok.start+token_length];
+        const end = file.source[tok.start+token_length..lc.line_end];
+        std.debug.print("{}: \x1b[32m{s}\x1b[0;1;31m{s}\x1b[0;32m{s}\x1b[0m\n", .{lc.line, begin, mid, end});
     }
 
     //     pub inline fn getOrPut(self: *Self, string: []const u8) !StringInterner.Index {
