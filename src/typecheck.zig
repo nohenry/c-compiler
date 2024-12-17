@@ -39,7 +39,13 @@ pub const BuiltinsType = struct {
     pub fn __builtin_va_arg(unit: *Unit) !Type {
         return unit.interner.funcTy(&.{
             try __builtin_va_list(unit),
-            unit.interner.anyKindTy(.@"type"),
+            unit.interner.anyKindTy(.type),
+        }, unit.interner.voidTy(), false);
+    }
+
+    pub fn __builtin_va_end(unit: *Unit) !Type {
+        return unit.interner.funcTy(&.{
+            try __builtin_va_list(unit),
         }, unit.interner.voidTy(), false);
     }
 };
@@ -879,44 +885,7 @@ pub const TypeChecker = struct {
 
                 return self.unit.interner.voidTy();
             },
-            .char_type,
-            .signed_char_type,
-            .unsigned_char_type,
-            .short_type,
-            .signed_short_type,
-            .unsigned_short_type,
-            .int_type,
-            .signed_int_type,
-            .unsigned_int_type,
-            .long_type,
-            .signed_long_type,
-            .unsigned_long_type,
-            .long_long_type,
-            .signed_long_long_type,
-            .unsigned_long_long_type,
-            .float_type,
-            .double_type,
-            .long_double_type,
-            .bool_type,
-            .unsigned,
-            .signed,
-            .void_type,
-            .pointer,
-            .array_type,
-            .array_type_fixed,
-            .function_type,
-            .function_type_one_parameter,
-            .function_type_parameter,
-            .parameter,
-            .parameter_ident,
-            .@"struct", .@"union",
-            .struct_ident, .union_ident,
-            .@"enum",
-            .enum_ident,
-            .struct_forward,
-            .union_forward,
-            .enum_forward,
-            .type_name => blk: {
+            .char_type, .signed_char_type, .unsigned_char_type, .short_type, .signed_short_type, .unsigned_short_type, .int_type, .signed_int_type, .unsigned_int_type, .long_type, .signed_long_type, .unsigned_long_type, .long_long_type, .signed_long_long_type, .unsigned_long_long_type, .float_type, .double_type, .long_double_type, .bool_type, .unsigned, .signed, .void_type, .pointer, .array_type, .array_type_fixed, .function_type, .function_type_one_parameter, .function_type_parameter, .parameter, .parameter_ident, .@"struct", .@"union", .struct_ident, .union_ident, .@"enum", .enum_ident, .struct_forward, .union_forward, .enum_forward, .type_name => blk: {
                 const ty = try self.checkNodeType(nidx);
                 break :blk self.unit.interner.typeTy(ty, 0);
             },
@@ -1026,11 +995,11 @@ pub const TypeChecker = struct {
 
             .function_type => blk: {
                 const ret_ty_index = Node.absoluteIndex(nidx, node.data.four.a);
-                const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, null);
+                var fun_ty = self.unit.interner.funcTyNoParams(self.unit.interner.voidTy(), false);
+                const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, &fun_ty);
                 if (ret_ty.isIncomplete()) {
                     std.debug.panic("Function has incomplete return type! (tried to reference undefined struct or union)", .{});
                 }
-                var fun_ty = self.unit.interner.funcTyNoParams(ret_ty, false);
                 if (last_type) |last| {
                     const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
 
@@ -1041,11 +1010,13 @@ pub const TypeChecker = struct {
 
                     break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
                 } else if (ret_ty.kind == .pointer) {
-                    const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
+                    // const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
 
-                    fun_ty = self.unit.interner.funcTyNoParams(ret_ty_base, false);
-                    break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
+                    // fun_ty = self.unit.interner.funcTyNoParams(ret_ty_base, false);
+                    // break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
+                    // break :blk self.unit.interner.rebasePointerRecursive(, fun_ty)[0];
                 }
+                // ret
 
                 break :blk fun_ty;
             },
@@ -1262,23 +1233,25 @@ pub const TypeChecker = struct {
 
                 break :blk result_ty;
             },
-            .struct_forward => {
+            .struct_forward => blk: {
                 const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
                 const sym = self.unit.symbol_table.searchTypeSymbol(ident_str) orelse {
-                    std.debug.panic("Struct \x1b[1m'{s}'\x1b[0m is not defined", .{ident_str});
+                    // std.debug.panic("Struct \x1b[1m'{s}'\x1b[0m is not defined", .{ident_str});
+                    break :blk self.unit.interner.tbdNidx(@bitCast(node.data.two.a));
                 };
 
                 try self.unit.node_to_node.put(nidx, sym.nidx);
-                return self.unit.declared_type.get(sym.nidx) orelse self.unit.interner.tbdNidx(sym.nidx);
+                return self.unit.declared_type.get(sym.nidx) orelse self.unit.interner.tbdNidx(@bitCast(node.data.two.a));
             },
-            .union_forward => {
+            .union_forward => blk: {
                 const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
                 const sym = self.unit.symbol_table.searchTypeSymbol(ident_str) orelse {
-                    std.debug.panic("Union \x1b[1m'{s}'\x1b[0m is not defined", .{ident_str});
+                    // std.debug.panic("Union \x1b[1m'{s}'\x1b[0m is not defined", .{ident_str});
+                    break :blk self.unit.interner.tbdNidx(@bitCast(node.data.two.a));
                 };
 
                 try self.unit.node_to_node.put(nidx, sym.nidx);
-                return self.unit.declared_type.get(sym.nidx) orelse self.unit.interner.tbdNidx(sym.nidx);
+                return self.unit.declared_type.get(sym.nidx) orelse self.unit.interner.tbdNidx(@bitCast(node.data.two.a));
             },
             .enum_forward => {
                 const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));

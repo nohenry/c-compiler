@@ -61,7 +61,7 @@ pub const TypeKind = struct {
         @"enum": struct {
             nidx: NodeIndex,
         },
-        tbd_nidx: NodeIndex,
+        tbd_nidx: TokenIndex,
 
         field: struct {
             name: StringInterner.Index,
@@ -349,11 +349,18 @@ pub const TypeInterner = struct {
         return self.createOrGetTy(.{ .type = base }, qualifier);
     }
 
+    /// Sets the base value of pointer, array type or function type (base is return type)
     pub fn rebasePointer(self: *Self, ptr_type: Type, new_base: Type) Type {
         switch (ptr_type.kind) {
             .pointer => return self.pointerTy(new_base, ptr_type.qualifiers),
             .array => return self.arrayTy(new_base, ptr_type.kind.array.size, ptr_type.qualifiers),
             .array_unsized => return self.arrayUnsizedTy(new_base, ptr_type.qualifiers),
+            .func => |fun| return self.createOrGetTy(.{
+                .func = .{
+                    .params = fun.params,
+                    .ret_ty = new_base,
+                },
+            }, ptr_type.qualifiers),
             else => unreachable,
         }
     }
@@ -508,7 +515,7 @@ pub const TypeInterner = struct {
         }, qualifiers);
     }
 
-    pub fn tbdNidx(self: *Self, nidx: NodeIndex) Type {
+    pub fn tbdNidx(self: *Self, nidx: TokenIndex) Type {
         return self.createOrGetTy(.{
             .tbd_nidx = nidx,
         }, 0);
