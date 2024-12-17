@@ -901,10 +901,10 @@ pub const TypeChecker = struct {
     }
 
     pub fn checkNodeType(self: *Self, nidx: NodeIndex) !Type {
-        return try self.checkNodeTypeImpl(nidx, null);
+        return try self.checkNodeTypeImpl(nidx);
     }
 
-    pub fn checkNodeTypeImpl(self: *Self, nidx: NodeIndex, last_type: ?*Type) std.mem.Allocator.Error!Type {
+    pub fn checkNodeTypeImpl(self: *Self, nidx: NodeIndex) std.mem.Allocator.Error!Type {
         const node = &self.unit.nodes.items[nidx];
         const result: Type = switch (node.kind) {
             .char_type => self.unit.interner.charTy(false, node.data.eight.h),
@@ -933,41 +933,19 @@ pub const TypeChecker = struct {
 
             .pointer => blk: {
                 const qual: TypeQualifier.Type = @intCast(node.data.two.b);
-                var ty = self.unit.interner.pointerTy(self.unit.interner.voidTy(), qual);
-                if (last_type) |last| {
-                    ty = self.unit.interner.rebasePointer(ty, last.*);
-                }
-                const base = try self.checkNodeTypeImpl(node.data.two.a, &ty);
-                if (base.kind == .pointer or base.kind == .func or base.kind == .array or base.kind == .array_unsized) {
-                    break :blk base;
-                } else {
-                    ty, _ = self.unit.interner.rebasePointerRecursive(ty, base);
-                    break :blk ty;
-                }
+                const base = try self.checkNodeTypeImpl(node.data.two.a);
+                break :blk self.unit.interner.pointerTy(base, qual);
             },
 
             .array_type => blk: {
-                const base_type_index = node.data.two.a;
-
-                var ty = self.unit.interner.arrayUnsizedTy(self.unit.interner.voidTy(), node.data.eight.h);
-                if (last_type) |last| {
-                    ty = self.unit.interner.rebasePointer(ty, last.*);
-                }
-
-                const base = try self.checkNodeTypeImpl(base_type_index, &ty);
+                const base = try self.checkNodeTypeImpl(node.data.two.a);
                 if (base.isIncomplete()) {
                     std.debug.panic("Array has incomplete type! (tried to reference undefined struct or union)", .{});
                 }
-
-                if (base.kind == .pointer or base.kind == .func or base.kind == .array or base.kind == .array_unsized) {
-                    break :blk base;
-                } else {
-                    ty, _ = self.unit.interner.rebasePointerRecursive(ty, base);
-                    break :blk ty;
-                }
+                const ty = self.unit.interner.arrayUnsizedTy(base, node.data.eight.h);
+                break :blk ty;
             },
             .array_type_fixed => blk: {
-                const base_type_index = node.data.two.a;
                 const size_index = Node.absoluteIndex(nidx, node.data.four.c);
                 var evaluator = SimpleEvaluator.init(self.unit);
                 const size_value = try evaluator.evalNode(size_index);
@@ -975,55 +953,29 @@ pub const TypeChecker = struct {
                     std.debug.panic("Expected an integer value for array size!", .{});
                 }
 
-                var ty = self.unit.interner.arrayTy(self.unit.interner.voidTy(), size_value.int_value, node.data.eight.h);
-                if (last_type) |last| {
-                    ty = self.unit.interner.rebasePointer(ty, last.*);
-                }
-
-                const base = try self.checkNodeTypeImpl(base_type_index, &ty);
+                const base = try self.checkNodeTypeImpl(node.data.two.a);
                 if (base.isIncomplete()) {
                     std.debug.panic("Array has incomplete type! (tried to reference undefined struct or union)", .{});
                 }
 
-                if (base.kind == .pointer or base.kind == .func or base.kind == .array or base.kind == .array_unsized) {
-                    break :blk base;
-                } else {
-                    ty, _ = self.unit.interner.rebasePointerRecursive(ty, base);
-                    break :blk ty;
-                }
+                const ty = self.unit.interner.arrayTy(base, size_value.int_value, node.data.eight.h);
+
+                break :blk ty;
             },
 
             .function_type => blk: {
                 const ret_ty_index = Node.absoluteIndex(nidx, node.data.four.a);
-                var fun_ty = self.unit.interner.funcTyNoParams(self.unit.interner.voidTy(), false);
-                const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, &fun_ty);
+                const ret_ty = try self.checkNodeTypeImpl(ret_ty_index);
                 if (ret_ty.isIncomplete()) {
                     std.debug.panic("Function has incomplete return type! (tried to reference undefined struct or union)", .{});
                 }
-                if (last_type) |last| {
-                    const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
-
-                    fun_ty = self.unit.interner.funcTyNoParams(
-                        self.unit.interner.rebasePointerRecursive(last.*, ret_ty_base)[0],
-                        false,
-                    );
-
-                    break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
-                } else if (ret_ty.kind == .pointer) {
-                    // const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
-
-                    // fun_ty = self.unit.interner.funcTyNoParams(ret_ty_base, false);
-                    // break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
-                    // break :blk self.unit.interner.rebasePointerRecursive(, fun_ty)[0];
-                }
-                // ret
-
+                const fun_ty = self.unit.interner.funcTyNoParams(ret_ty, false);
                 break :blk fun_ty;
             },
             .function_type_one_parameter => blk: {
                 const ret_ty_index = Node.absoluteIndex(nidx, node.data.four.a);
                 const param_index = Node.absoluteIndex(nidx, node.data.four.b);
-                const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, null);
+                const ret_ty = try self.checkNodeTypeImpl(ret_ty_index);
                 if (ret_ty.isIncomplete()) {
                     std.debug.panic("Function has incomplete return type! (tried to reference undefined struct or union)", .{});
                 }
@@ -1034,7 +986,7 @@ pub const TypeChecker = struct {
                     true,
                 } else .{
                     blk1: {
-                        param_buf[0] = try self.checkNodeTypeImpl(param_index, null);
+                        param_buf[0] = try self.checkNodeTypeImpl(param_index);
                         if (param_buf[0].isIncomplete()) {
                             std.debug.panic("Function has incomplete type for argument 0! (tried to reference undefined struct or union)", .{});
                         }
@@ -1043,36 +995,14 @@ pub const TypeChecker = struct {
                     false,
                 };
 
-                var fun_ty = self.unit.interner.funcTy(param_tys, ret_ty, variadic);
-
-                if (last_type) |last| {
-                    const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
-
-                    fun_ty = self.unit.interner.funcTy(
-                        param_tys,
-                        self.unit.interner.rebasePointerRecursive(last.*, ret_ty_base)[0],
-                        variadic,
-                    );
-
-                    break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
-                } else if (ret_ty.kind == .pointer) {
-                    const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
-
-                    fun_ty = self.unit.interner.funcTy(
-                        param_tys,
-                        ret_ty_base,
-                        variadic,
-                    );
-                    break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
-                }
-
+                const fun_ty = self.unit.interner.funcTy(param_tys, ret_ty, variadic);
                 break :blk fun_ty;
             },
             .function_type_parameter => blk: {
                 const ret_ty_index = Node.absoluteIndex(nidx, node.data.four.a);
                 var param_index = node.data.two.b;
                 const param_count = node.data.four.b;
-                const ret_ty = try self.checkNodeTypeImpl(ret_ty_index, null);
+                const ret_ty = try self.checkNodeTypeImpl(ret_ty_index);
                 const end_index = param_index + param_count;
                 if (ret_ty.isIncomplete()) {
                     std.debug.panic("Function has incomplete return type! (tried to reference undefined struct or union)", .{});
@@ -1086,48 +1016,26 @@ pub const TypeChecker = struct {
                         variadic = true;
                         break;
                     }
-                    const param_ty = try self.checkNodeTypeImpl(node_index, null);
+                    const param_ty = try self.checkNodeTypeImpl(node_index);
                     if (param_ty.isIncomplete()) {
                         std.debug.panic("Function has incomplete type for argument {}! (tried to reference undefined struct or union)", .{params.items.len});
                     }
                     try params.append(param_ty);
                 }
 
-                var fun_ty = self.unit.interner.funcTy(params.items, ret_ty, variadic);
-
-                if (last_type) |last| {
-                    const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
-
-                    fun_ty = self.unit.interner.funcTy(
-                        params.items,
-                        self.unit.interner.rebasePointerRecursive(last.*, ret_ty_base)[0],
-                        variadic,
-                    );
-
-                    break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
-                } else if (ret_ty.kind == .pointer) {
-                    const new_type, const ret_ty_base = self.unit.interner.rebasePointerRecursive(ret_ty, self.unit.interner.voidTy());
-
-                    fun_ty = self.unit.interner.funcTy(
-                        params.items,
-                        ret_ty_base,
-                        variadic,
-                    );
-                    break :blk self.unit.interner.rebasePointerRecursive(new_type, fun_ty)[0];
-                }
-
+                const fun_ty = self.unit.interner.funcTy(params.items, ret_ty, variadic);
                 break :blk fun_ty;
             },
             .parameter => blk: {
                 const ty_index = Node.absoluteIndex(nidx, node.data.four.a);
-                break :blk try self.checkNodeTypeImpl(ty_index, null);
+                break :blk try self.checkNodeTypeImpl(ty_index);
             },
             .parameter_ident => blk: {
                 const ty_index = Node.absoluteIndex(nidx, node.data.four.a);
                 const ident_index = node.data.two.b;
                 const ident_str = self.unit.identifierAt(@bitCast(ident_index));
                 self.unit.symbol_table.putSymbol(ident_str, .{ .nidx = nidx });
-                const param_ty = try self.checkNodeTypeImpl(ty_index, null);
+                const param_ty = try self.checkNodeTypeImpl(ty_index);
                 try self.unit.declared_type.put(nidx, param_ty);
                 // std.heap.MemoryPool(Type).
                 break :blk param_ty;

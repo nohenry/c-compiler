@@ -1388,7 +1388,7 @@ pub const Parser = struct {
                 },
                 else => {
                     var this_ident: ?TokenIndex = null;
-                    const this_type = try self.parseDeclarator(type_node, &this_ident);
+                    const this_type = try self.parseDeclarator(type_node, null, &this_ident);
 
                     var this_attribute_data: ?NodeData = null;
                     var this_asm_label: ?NodeData = null;
@@ -1742,29 +1742,68 @@ pub const Parser = struct {
 
     pub const DeclaratorResult = struct {
         node: ?NodeIndex = null,
+        node_insert: ?NodeInsert = null,
         is_function: bool = false,
         is_function_ptr: bool = false,
         is_pointer: bool = false,
     };
 
-    pub fn parseDeclarator(self: *Self, base_type: NodeIndex, identifier: *?TokenIndex) !DeclaratorResult {
+    pub const NodeInsert = struct {
+        nidx: NodeIndex,
+        data_size: std.meta.FieldEnum(NodeData),
+        data_field: enum { self, a, b, c, d, e, f, g, h },
+
+        // pub fn setNidx(self: ?@This(), parser: *Parser, nidx: NodeIndex) void {
+        //     switch (self.data_size) {
+        //         .long => {
+        //             _ = self.data_field.self;
+
+        //         },
+        //     }
+        // }
+    };
+
+    pub fn parseDeclarator(self: *Self, base_type: NodeIndex, node_insert: ?NodeInsert, identifier: *?TokenIndex) !DeclaratorResult {
         const ptok = self.peekToken() orelse @panic("ran out of tokens");
         switch (ptok.token.kind) {
             .star => {
                 self.nextToken();
                 const type_qualifier = self.parseAnyTypeQualifiers();
-                const element_type = try self.parseDeclarator(base_type, identifier);
+
+                const new_node = try self.createNode(Node{
+                    .kind = .pointer,
+                    .data = .{
+                        .two = .{
+                            .a = base_type,
+                            .b = type_qualifier,
+                        },
+                    },
+                });
+                _ = node_insert;
+                // if (node_insert) |ni| {
+                //     const node_data = &self.unit.nodes.items[ni.nidx].data;
+                //     std.debug.assert(ni.data_field == .a);
+                //     switch (ni.data_size) {
+                //         .four => {
+                //             node_data.four.a = @as(u16, @truncate(new_node - ni.nidx));
+                //         },
+                //         .two => {
+                //             node_data.two.a = new_node;
+                //         },
+                //         else => @panic("invalid"),
+                //     }
+                // }
+                const new_node_insert = NodeInsert{
+                    .nidx = new_node,
+                    .data_size = .two,
+                    .data_field = .a,
+                };
+
+                const element_type = try self.parseDeclarator(new_node, new_node_insert, identifier);
 
                 return .{
-                    .node = try self.createNode(Node{
-                        .kind = .pointer,
-                        .data = .{
-                            .two = .{
-                                .a = element_type.node.?,
-                                .b = type_qualifier,
-                            },
-                        },
-                    }),
+                    .node = element_type.node,
+                    .node_insert = element_type.node_insert orelse new_node_insert,
                     .is_function = element_type.is_function,
                     .is_function_ptr = element_type.is_function_ptr,
                     .is_pointer = true,
@@ -1774,110 +1813,117 @@ pub const Parser = struct {
         }
     }
 
-    fn parseDirectDeclarator(self: *Self, base_type: NodeIndex, identifier: *?TokenIndex) (ParseError || std.mem.Allocator.Error)!DeclaratorResult {
+    fn parseDirectDeclarator(self: *Self, last_type: NodeIndex, identifier: *?TokenIndex) (ParseError || std.mem.Allocator.Error)!DeclaratorResult {
         var ptok = self.peekToken() orelse @panic("ran out of tokens");
-        var left = DeclaratorResult{};
-
         switch (ptok.token.kind) {
             .identifier => {
+                if (identifier.* != null) {
+                    return DeclaratorResult{ .node = last_type };
+                }
                 self.nextToken();
                 identifier.* = ptok.index;
-                left = .{ .node = base_type };
+
+                return try self.parseDirectDeclarator(last_type, identifier);
             },
             .open_paren => {
                 self.nextToken();
                 const ntok = self.peekToken();
-                // if (ntok != null and ntok.?.token.kind != .open_paren and ntok.?.token.kind != .open_bracket and ntok.?.token.kind != ) {
-                // }
+
                 if (ntok != null and (ntok.?.token.kind == .star or ntok.?.token.kind == .identifier)) {
-                    left = try self.parseDeclarator(base_type, identifier);
+                    const new_base = try self.parseDeclarator(last_type, null, identifier);
+                    const new_new_base = try self.parseDirectDeclarator(new_base.node.?, identifier);
                     _ = try self.expect(.close_paren);
+
+                    const child = try self.parseDirectDeclarator(last_type, identifier);
+
+                    const ni = new_base.node_insert.?;
+                    const node_data = &self.unit.nodes.items[ni.nidx].data;
+                    std.debug.assert(ni.data_field == .a);
+                    switch (ni.data_size) {
+                        .four => node_data.four.a = self.relativeOffset(ni.nidx),
+                        .two => node_data.two.a = @truncate(child.node.?),
+                        else => @panic("invalid"),
+                    }
+
+                    return DeclaratorResult{
+                        .node = new_new_base.node.?,
+                        .is_function = child.is_function,
+                        .is_function_ptr = child.is_function and (new_new_base.is_pointer or new_base.is_pointer),
+                    };
                 } else {
-                    left = .{
-                        .node = try self.parseParameters(base_type),
+                    return DeclaratorResult{
+                        .node = try self.parseParameters(last_type),
                         .is_function = true,
-                        .is_function_ptr = left.is_pointer,
+                        .is_function_ptr = false,
                     };
                 }
             },
-            else => {
-                left = .{ .node = base_type };
+            .open_bracket => {
+                self.nextToken();
+                var type_qualifiers = self.parseAnyTypeQualifiers();
+                ptok = self.peekToken() orelse @panic("unexpecteed EOF");
+
+                var node_data: NodeData = undefined;
+                node_data.as(.eight).h = type_qualifiers;
+
+                switch (ptok.token.kind) {
+                    .close_bracket => {
+                        self.nextToken();
+
+                        node_data.two.a = (try self.parseDirectDeclarator(last_type, identifier)).node.?;
+                        const new_node = try self.createNode(Node{
+                            .kind = .array_type,
+                            .data = node_data,
+                        });
+
+                        return DeclaratorResult{ .node = new_node };
+                    },
+                    .star => {
+                        self.nextToken();
+                        _ = try self.expect(.close_bracket);
+                        node_data.two.a = (try self.parseDirectDeclarator(last_type, identifier)).node.?;
+
+                        const new_node = try self.createNode(Node{
+                            .kind = .array_type_variable,
+                            .data = node_data,
+                        });
+
+                        return DeclaratorResult{ .node = new_node };
+                    },
+                    .static => {
+                        self.nextToken();
+                        type_qualifiers |= self.parseAnyTypeQualifiers();
+                        node_data.as(.eight).h = type_qualifiers;
+                        const size_expr = try self.parseExpression();
+                        _ = try self.expect(.close_bracket);
+
+                        node_data.two.a = (try self.parseDirectDeclarator(last_type, identifier)).node.?;
+                        node_data.as(.four).c = @truncate(self.relativeOffset(size_expr));
+
+                        const new_node = try self.createNode(Node{
+                            .kind = .array_type_static,
+                            .data = node_data,
+                        });
+
+                        return DeclaratorResult{ .node = new_node };
+                    },
+                    else => {
+                        const size_expr = try self.parseExpression();
+                        _ = try self.expect(.close_bracket);
+
+                        node_data.two.a = (try self.parseDirectDeclarator(last_type, identifier)).node.?;
+                        node_data.as(.four).c = @truncate(self.relativeOffset(size_expr));
+                        const new_node = try self.createNode(Node{
+                            .kind = .array_type_fixed,
+                            .data = node_data,
+                        });
+
+                        return DeclaratorResult{ .node = new_node };
+                    },
+                }
             },
+            else => return DeclaratorResult{ .node = last_type },
         }
-
-        ptok = self.peekToken() orelse return left;
-        while (true) : (ptok = self.peekToken() orelse break) {
-            switch (ptok.token.kind) {
-                .open_bracket => {
-                    self.nextToken();
-                    var type_qualifiers = self.parseAnyTypeQualifiers();
-                    ptok = self.peekToken() orelse @panic("unexpecteed EOF");
-
-                    var node_data: NodeData = undefined;
-                    node_data.as(.two).a = left.node.?;
-                    node_data.as(.eight).h = type_qualifiers;
-
-                    switch (ptok.token.kind) {
-                        .close_bracket => {
-                            self.nextToken();
-                            // node_data.as(.two).a = (try self.parseDirectDeclarator(base_type, base_ident, identifier)) orelse base_ident.*.?;
-
-                            left.node = try self.createNode(Node{
-                                .kind = .array_type,
-                                .data = node_data,
-                            });
-                        },
-                        .star => {
-                            self.nextToken();
-                            _ = try self.expect(.close_bracket);
-                            // node_data.as(.two).a = (try self.parseDirectDeclarator(base_type, base_ident, identifier)) orelse base_ident.*.?;
-
-                            left.node = try self.createNode(Node{
-                                .kind = .array_type_variable,
-                                .data = node_data,
-                            });
-                        },
-                        .static => {
-                            self.nextToken();
-                            type_qualifiers |= self.parseAnyTypeQualifiers();
-                            node_data.as(.eight).h = type_qualifiers;
-                            const size_expr = try self.parseExpression();
-                            _ = try self.expect(.close_bracket);
-                            // node_data.as(.two).a = (try self.parseDirectDeclarator(base_type, base_ident, identifier)) orelse base_ident.*.?;
-
-                            node_data.as(.four).c = @truncate(self.relativeOffset(size_expr));
-
-                            left.node = try self.createNode(Node{
-                                .kind = .array_type_static,
-                                .data = node_data,
-                            });
-                        },
-                        else => {
-                            const size_expr = try self.parseExpression();
-                            _ = try self.expect(.close_bracket);
-                            // std.log.info("{} {} {}", .{ node_data.as(.two).a, size_expr, self.unit.nodes.items.len });
-                            // node_data.as(.two).a = (try self.parseDirectDeclarator(base_type, base_ident, identifier)) orelse base_ident.*.?;
-
-                            node_data.as(.four).c = @truncate(self.relativeOffset(size_expr));
-
-                            left.node = try self.createNode(Node{
-                                .kind = .array_type_fixed,
-                                .data = node_data,
-                            });
-                        },
-                    }
-                },
-                .open_paren => {
-                    self.nextToken();
-                    left.node = try self.parseParameters(left.node.?);
-                    left.is_function = true;
-                    left.is_function_ptr = left.is_pointer;
-                },
-                else => return left,
-            }
-        }
-
-        return left;
     }
 
     pub fn parseParameters(self: *Self, replacement: NodeIndex) !NodeIndex {
@@ -1945,7 +1991,7 @@ pub const Parser = struct {
             var attribute_data: ?NodeData = null;
             const type_node = try self.parseDeclarationSpecifiers(&storage_class, &attribute_data);
 
-            const full_type = try self.parseDeclarator(type_node, &identifier);
+            const full_type = try self.parseDeclarator(type_node, null, &identifier);
 
             var node_data: NodeData = undefined;
             node_data.as(.four).a = @truncate(self.relativeOffset(full_type.node.?));
@@ -2125,7 +2171,7 @@ pub const Parser = struct {
                 },
                 else => {
                     var identifier: ?TokenIndex = null;
-                    const declarator = try self.parseDeclarator(member_type, &identifier);
+                    const declarator = try self.parseDeclarator(member_type, null, &identifier);
 
                     var node_data: NodeData = undefined;
                     if (identifier) |i| node_data.as(.two).a = @bitCast(i);
@@ -2981,7 +3027,7 @@ pub const Parser = struct {
                 var attribute_data: ?NodeData = null;
                 const type_node = try self.parseDeclarationSpecifiers(&storage_class, &attribute_data);
                 if (attribute_data != null) @panic("what do we do?");
-                return (try self.parseDeclarator(type_node, &identifier)).node.?;
+                return (try self.parseDeclarator(type_node, null, &identifier)).node.?;
             },
             else => return try self.parseOperatorExpression(last_prec),
         }
@@ -3216,7 +3262,7 @@ pub const Parser = struct {
                         var attribute_data: ?NodeData = null;
                         const type_node = try self.parseDeclarationSpecifiers(&storage_class, &attribute_data);
 
-                        const full_type = try self.parseDeclarator(type_node, &identifier);
+                        const full_type = try self.parseDeclarator(type_node, null, &identifier);
 
                         _ = try self.expect(.close_paren);
 
@@ -3391,21 +3437,21 @@ pub const Parser = struct {
                 var attribute_data: ?NodeData = null;
                 const type_node = try self.parseDeclarationSpecifiers(&storage_class, &attribute_data);
                 if (attribute_data != null) @panic("what do we do?");
-                return (try self.parseDeclarator(type_node, &identifier)).node.?;
+                return (try self.parseDeclarator(type_node, null, &identifier)).node.?;
             },
             // .type_name => {
             //     self.nextToken();
-                // const ntok = self.peekToken();
-                // if (ntok != null and ntok.?.token.kind == .colon) {
-                //     self.nextToken();
-                //     const stmt = try self.parseStatement();
-                //     return try self.createNode(Node{
-                //         .kind = .label,
-                //         .data = .{
-                //             .two = .{ .a = @bitCast(ptok.index), .b = stmt },
-                //         },
-                //     });
-                // }
+            // const ntok = self.peekToken();
+            // if (ntok != null and ntok.?.token.kind == .colon) {
+            //     self.nextToken();
+            //     const stmt = try self.parseStatement();
+            //     return try self.createNode(Node{
+            //         .kind = .label,
+            //         .data = .{
+            //             .two = .{ .a = @bitCast(ptok.index), .b = stmt },
+            //         },
+            //     });
+            // }
 
             //     return self.createNode(Node{
             //         .kind = .type_name,
