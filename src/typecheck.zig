@@ -40,7 +40,7 @@ pub const BuiltinsType = struct {
         return unit.interner.funcTy(&.{
             try __builtin_va_list(unit),
             unit.interner.anyKindTy(.type),
-        }, unit.interner.voidTy(), false);
+        }, unit.interner.anyTy(), false);
     }
 
     pub fn __builtin_va_end(unit: *Unit) !Type {
@@ -1268,8 +1268,12 @@ pub const TypeChecker = struct {
             return from
         else if (to == self.unit.interner.anyTy())
             return from
+        else if (from == self.unit.interner.anyTy())
+            return to
         else if (to == self.unit.interner.anyKindTy(std.meta.activeTag(from.kind)))
             return from
+        else if (from == self.unit.interner.anyKindTy(std.meta.activeTag(to.kind)))
+            return to
         else if (from.kind == .pointer and to.kind == .pointer) {
             if (from.kind.pointer.base == to.kind.pointer.base) {
                 // f 0b0000 0b0000 0b0001 0b0001

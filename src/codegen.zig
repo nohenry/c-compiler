@@ -154,16 +154,40 @@ pub const BuiltinsCodeGen = struct {
         break :blk &result;
     });
 
-    pub fn __builtin_va_start(cg: *CodeGenerator, args: []const NodeIndex) !Value {
-        _ = cg;
-        _ = args;
+    pub fn __builtin_va_start(cg: *CodeGenerator, args: []const NodeIndex) std.mem.Allocator.Error!Value {
+        const va_list_expr = try cg.genNodeExpr(args[0], null);
+        const ty = cg.unit.node_to_type.get(args[0]).?;
+        const field_tys = cg.unit.interner.getMultiTypes(ty.kind.builtin_struct.fields);
+        _ = try cg.writeInst(try cg.formStore(field_tys[0], X29, va_list_expr.memory_offset.register, va_list_expr.memory_offset.offset));
         return .{ .inst = 0 };
     }
 
-    pub fn __builtin_va_arg(cg: *CodeGenerator, args: []const NodeIndex) !Value {
-        _ = cg;
-        _ = args;
-        return .{ .inst = 0 };
+    pub fn __builtin_va_arg(cg: *CodeGenerator, args: []const NodeIndex) std.mem.Allocator.Error!Value {
+        const va_list_expr = try cg.genNodeExpr(args[0], null);
+        const ty = cg.unit.node_to_type.get(args[0]).?;
+        const field_tys = cg.unit.interner.getMultiTypes(ty.kind.builtin_struct.fields);
+        const value = try va_list_expr.getValue(cg, field_tys[0], null, false, false);
+        const out_reg = cg.availableRegister().?;
+        cg.useRegister(out_reg);
+
+
+        const ty_ty = cg.unit.node_to_type.get(args[1]).?;
+        const result_ty = ty_ty.kind.type;
+        try cg.writeCastLoad(result_ty, result_ty, out_reg, value.register, 0);
+
+        const ptr_layout = cg.computeLayout(result_ty);
+        _ = try cg.writeInst(CodeGenerator.dataProcImm(.add_sub, .{
+            .sfopSshimm12rnrd = .{
+                .rd = value.register,
+                .rn = value.register,
+                .imm = @intCast(@max(8, ptr_layout.max())),
+                .S = false,
+                .op = 0,
+            },
+        }));
+        _ = try cg.writeInst(try cg.formStore(field_tys[0], value.register, va_list_expr.memory_offset.register, va_list_expr.memory_offset.offset));
+
+        return .{ .register = out_reg };
     }
 
     pub fn __builtin_va_end(cg: *CodeGenerator, args: []const NodeIndex) !Value {
@@ -638,11 +662,11 @@ pub const CodeGenerator = struct {
                                 const layout = self.computeLayout(fn_param_types[i]);
                                 self.fctx.?.next_offset += layout.max();
                                 const offset = -@as(i32, @intCast(self.fctx.?.next_offset));
-                                try self.fctx.?.local_offsets.put(param_nidx, 0);
+                                try self.fctx.?.local_offsets.put(param_nidx, offset);
                                 _ = try self.writeInst(try self.formStore(
                                     fn_param_types[i],
                                     0,
-                                    SP,
+                                    X29,
                                     offset,
                                 ));
                             },
@@ -665,16 +689,15 @@ pub const CodeGenerator = struct {
                                     // Parameters after w7 are already on stack
                                     if (i < X8) {
                                         self.fctx.?.next_offset = std.mem.alignForward(u32, self.fctx.?.next_offset, layout.alignment);
+                                        self.fctx.?.next_offset += layout.max();
                                         const offset = -@as(i32, @intCast(self.fctx.?.next_offset));
                                         try self.fctx.?.local_offsets.put(param_nidx, offset);
                                         _ = try self.writeInst(try self.formStore(
                                             fn_param_types[i],
                                             @truncate(i),
-                                            SP,
+                                            X29,
                                             offset,
                                         ));
-
-                                        self.fctx.?.next_offset += layout.max();
                                     } else {
                                         // try self.fctx.?.local_offsets.put(param_nidx, self.fctx.?.next_offset);
                                         @panic("todo: handle this");
@@ -787,6 +810,27 @@ pub const CodeGenerator = struct {
                     }));
                 }
             },
+
+            .while_loop,
+            .while_loop_empty,
+            .do_while_loop,
+            .do_while_loop_empty,
+            .for_loop,
+            .for_loop_inc,
+            .for_loop_empty,
+            .for_loop_empty_inc,
+            .switch_case,
+            .case,
+            .default,
+            .label,
+            .goto,
+            .continue_statement,
+            .break_statement,
+            .if_statement,
+            .if_statement_no_body,
+            .if_statement_else,
+            .if_statement_no_body_else,
+            => std.log.warn("TODO node {} of type {}", .{ nidx, self.unit.nodes.items[nidx].kind }),
             else => {
                 const start_reloc = self.reloc_buffer.items.len;
                 const start_index = self.builder.currentOffset();
@@ -1116,11 +1160,7 @@ pub const CodeGenerator = struct {
                                     mo.offset = 0;
                                 }
 
-                                if (ty.isIntegral()) {
-                                    _ = try self.writeInst(try self.formStore(ty, rrvalue.register, mo.register, mo.offset));
-                                } else {
-                                    @panic("todo");
-                                }
+                                _ = try self.writeInst(try self.formStore(ty, rrvalue.register, mo.register, mo.offset));
                             },
                             else => @panic("Unhandled lavelu assignment"),
                         }
@@ -1344,6 +1384,7 @@ pub const CodeGenerator = struct {
 
                 const temp_reg = self.availableRegister().?;
                 self.useRegister(temp_reg);
+                self.expects_reg = temp_reg;
                 var stack_offset: u32 = 0;
                 // va arg values
                 while (index < arg_end_index) : ({
@@ -1361,7 +1402,7 @@ pub const CodeGenerator = struct {
 
                     _ = try self.writeInst(try self.formStore(arg_ty, arg_val.register, SP, @intCast(stack_offset)));
 
-                    stack_offset += @intCast(layout.max());
+                    stack_offset += @intCast(@max(8, layout.max()));
                 }
                 self.fctx.?.max_additional_stack = @max(self.fctx.?.max_additional_stack, stack_offset);
 
@@ -2247,8 +2288,10 @@ pub const CodeGenerator = struct {
         self.builder.ptrTo(std.macho.segment_command_64, self.segment_offset).filesize = total_length;
         self.builder.ptrTo(std.macho.segment_command_64, self.segment_offset).vmsize = total_length;
 
+        var sections: [4]u64 = undefined;
         const text_section = self.builder.ptrToSection(self.segment_offset, 0);
         text_section.size = self.inst_count * @sizeOf(u32);
+        sections[0] = text_section.addr;
 
         if (self.reloc_buffer.items.len > 0) {
             text_section.reloff = self.builder.currentOffset();
@@ -2258,23 +2301,26 @@ pub const CodeGenerator = struct {
 
         const data_section = self.builder.ptrToSection(self.segment_offset, 1);
         data_section.addr = text_section.addr + text_section.size;
+        sections[1] = data_section.addr;
         data_section.offset = self.builder.currentOffset();
         data_section.size = self.data_section_buffer.items.len;
         try self.builder.buffer.appendSlice(self.data_section_buffer.items);
 
         const common_section = self.builder.ptrToSection(self.segment_offset, 2);
         common_section.addr = data_section.addr + data_section.size;
+        sections[2] = common_section.addr;
         common_section.offset = self.builder.currentOffset();
         common_section.size = self.common_section_buffer.items.len;
         try self.builder.buffer.appendSlice(self.common_section_buffer.items);
 
         const cstring_section = self.builder.ptrToSection(self.segment_offset, 3);
         cstring_section.addr = common_section.addr + common_section.size;
+        sections[3] = cstring_section.addr;
         cstring_section.offset = self.builder.currentOffset();
         cstring_section.size = self.cstring_section_buffer.items.len;
         try self.builder.buffer.appendSlice(self.cstring_section_buffer.items);
 
-        const sections = [_]*align(1) std.macho.section_64{ text_section, data_section, common_section, cstring_section };
+        // const sections = [_]*align(1) std.macho.section_64{ text_section, data_section, common_section, cstring_section };
         // const sections = [_]*align(1) std.macho.section_64{ text_section };
 
         // const syms_len = self.builder.currentOffset() - syms_offset;
@@ -2302,7 +2348,7 @@ pub const CodeGenerator = struct {
             const offset = try self.builder.writeSymbolEntry(self.symtab_offset, next_offset, sym.value_ptr.macho_ty);
             self.builder.ptrTo(std.macho.nlist_64, offset).n_sect = @truncate(sym.value_ptr.section);
             if (sym.value_ptr.section > 0) {
-                self.builder.ptrTo(std.macho.nlist_64, offset).n_value = sections[sym.value_ptr.section - 1].addr + sym.value_ptr.address;
+                self.builder.ptrTo(std.macho.nlist_64, offset).n_value = sections[sym.value_ptr.section - 1] + sym.value_ptr.address;
             }
             next_offset += @truncate(sym.key_ptr.len + 2);
         }
