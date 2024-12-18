@@ -170,7 +170,6 @@ pub const BuiltinsCodeGen = struct {
         const out_reg = cg.availableRegister().?;
         cg.useRegister(out_reg);
 
-
         const ty_ty = cg.unit.node_to_type.get(args[1]).?;
         const result_ty = ty_ty.kind.type;
         try cg.writeCastLoad(result_ty, result_ty, out_reg, value.register, 0);
@@ -830,7 +829,11 @@ pub const CodeGenerator = struct {
             .if_statement_no_body,
             .if_statement_else,
             .if_statement_no_body_else,
-            => std.log.warn("TODO node {} of type {}", .{ nidx, self.unit.nodes.items[nidx].kind }),
+            => {
+                if (self.unit.config.debug_trace) {
+                    std.log.warn("TODO node {} of type {}", .{ nidx, self.unit.nodes.items[nidx].kind });
+                }
+            },
             else => {
                 const start_reloc = self.reloc_buffer.items.len;
                 const start_index = self.builder.currentOffset();
@@ -1569,7 +1572,11 @@ pub const CodeGenerator = struct {
                 // }
                 // return .{ .register = out_reg };
             },
-            else => std.log.warn("Skipping node {} kind: {}", .{ nidx, self.unit.nodes.items[nidx].kind }),
+            else => {
+                if (self.unit.config.debug_trace) {
+                    std.log.warn("Skipping node {} kind: {}", .{ nidx, self.unit.nodes.items[nidx].kind });
+                }
+            },
         }
 
         return .{ .inst = 0 };

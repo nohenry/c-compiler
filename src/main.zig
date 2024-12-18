@@ -6,6 +6,12 @@ const Node = @import("parser.zig").Node;
 const cg = @import("codegen.zig");
 const TypeChecker = @import("typecheck.zig").TypeChecker;
 const TypeInterner = @import("types.zig").TypeInterner;
+const diag = @import("diagnostics.zig");
+
+comptime {
+    _ = diag;
+    _ = diag.DiagnosticKind.foo;
+}
 
 pub fn compileLog(
     comptime message_level: std.log.Level,
@@ -43,12 +49,15 @@ pub fn main() !void {
     var source_file: ?[]const u8 = null;
     var output_file: ?[]const u8 = null;
 
+    // try diag.DiagnosticKind.write(.{ .foo = .{.tok = 2, .bar = 56} }, std.io.getStdOut().writer());
+
     var defines = std.ArrayList([]const u8).init(gpa.allocator());
     var include_paths = std.ArrayList([]const u8).init(gpa.allocator());
     _ = argv.next(); // program name
     var next_arg_mode: enum { source_file, output_file } = .source_file;
     var link = true;
     var expand = false;
+    var debug_trace = false;
     while (argv.next()) |arg| {
         switch (arg[0]) {
             '-' => {
@@ -77,6 +86,11 @@ pub fn main() !void {
                         std.debug.print("{s}\n", .{version});
                         return;
                     },
+                    '-' => {
+                        if (std.mem.eql(u8, arg[2..], "debug-trace")) {
+                            debug_trace = true;
+                        }
+                    },
                     else => std.log.warn("Unused argument {s}", .{arg}),
                 }
             },
@@ -95,10 +109,11 @@ pub fn main() !void {
         std.log.err("no input files", .{});
         return;
     }
-    std.log.debug("File: {s}", .{source_file.?});
-
     const source = try std.fs.cwd().readFileAlloc(gpa.allocator(), source_file.?, std.math.maxInt(usize));
-    std.debug.print("{s}\n", .{source});
+    if (debug_trace) {
+        std.log.debug("File: {s}", .{source_file.?});
+        std.debug.print("{s}\n", .{source});
+    }
 
     const full_path = try std.fs.realpathAlloc(gpa.allocator(), ".");
     const absolute_path = try std.fs.path.resolve(gpa.allocator(), &.{
@@ -106,9 +121,11 @@ pub fn main() !void {
         source_file.?,
     });
     defer gpa.allocator().free(absolute_path);
-    std.log.info("CWD: {s}", .{absolute_path});
+    if (debug_trace) {
+        std.log.info("CWD: {s}", .{absolute_path});
+    }
 
-    var unit = Unit.init(gpa.allocator());
+    var unit = Unit.init(gpa.allocator(), .{ .debug_trace = debug_trace });
     var interner = TypeInterner.init(&unit);
     interner.setup();
     unit.interner = &interner;
@@ -590,30 +607,40 @@ pub fn main() !void {
     _ = tokenizer.initFile(cfg_file_index);
 
     if (expand) {
-        var preprocessed_buffer = std.ArrayList(u8).init(gpa.allocator());
-        var preprocessed_writer = preprocessed_buffer.writer();
+        if (output_file) |of| {
+            var out_file = try std.fs.cwd().createFile(of, .{});
+            var preprocessed_writer = out_file.writer();
 
-        while (tokenizer.next(false)) |tidx| {
-            try unit.writeToken(&preprocessed_writer, tidx);
-        }
-        var out_file = try std.fs.cwd().createFile("out.cp", .{});
-        try out_file.writeAll(preprocessed_buffer.items);
-
-        for (unit.files.items) |file| {
-            if (file.tokens.items.len != 1) {
-                std.log.info("File {s} {}", .{ file.file_path, file.tokens.items.len });
+            while (tokenizer.next(false)) |tidx| {
+                try unit.writeToken(&preprocessed_writer, tidx);
             }
+        } else {
+            var preprocessed_writer = std.io.getStdOut().writer();
+
+            while (tokenizer.next(false)) |tidx| {
+                try unit.writeToken(&preprocessed_writer, tidx);
+            }
+            try preprocessed_writer.writeByte('\n');
         }
-        std.debug.print("\x1b[1;32mFinished Compiling\x1b[0m\n", .{});
+
+        if (debug_trace) {
+            std.debug.print("\x1b[1;32mFinished Compiling\x1b[0m\n", .{});
+        }
+
+        const format_config = diag.FormatConfig{
+            .colors = true,
+        };
+        for (unit.diagnostics.items) |d| {
+            try d.write(std.io.getStdOut().writer(), &unit, format_config);
+        }
         return;
     }
 
     var parser = Parser.init(&unit, &tokenizer);
     const unit_range = try parser.parseUnit();
 
-    const stdout = std.io.getStdOut();
-    var writer = stdout.writer();
-    try writer.print("Unit\n", .{});
+    // const stdout = std.io.getStdOut();
+    // var writer = stdout.writer();
     for (0..unit_range.count) |i| {
         const node_index = unit.node_ranges.items[i + unit_range.start];
         _ = node_index;
@@ -627,12 +654,26 @@ pub fn main() !void {
         // try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, true, writer);
     }
 
+    const format_config = diag.FormatConfig{
+        .colors = true,
+    };
+    for (unit.diagnostics.items) |d| {
+        try d.write(std.io.getStdOut().writer(), &unit, format_config);
+    }
+
     var codegen = try cg.CodeGenerator.init(&unit);
     for (0..unit_range.count) |i| {
         const node_index = unit.node_ranges.items[i + unit_range.start];
         // try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, writer);
         _ = try codegen.genNode(node_index);
     }
+
+    // const dia = diag.Diagnostic{
+    //     .level = .warning,
+    //     .location = .{ .single = .{ .file_index = 0, .index = 1 } },
+    //     .kind = .{ .foo = .{ .bar = 2, .tok = 34 } },
+    // };
+    // try dia.write(std.io.getStdOut().writer(), &unit, .{.colors = true});
 
     if (link) {
         try codegen.writeToFile("tmp.o");
@@ -644,11 +685,7 @@ pub fn main() !void {
         try codegen.writeToFile(output_file orelse "a.out");
     }
 
-    std.debug.print("\x1b[1;32mFinished Compiling\x1b[0m\n", .{});
-    // builder.write
-
-    // while (tokenizer.next()) |token_index| {
-    //     const token = &unit.tokens.items[token_index];
-    //     std.log.info("Token({}): {}", .{ token_index, token.* });
-    // }
+    if (debug_trace) {
+        std.debug.print("\x1b[1;32mFinished Compiling\x1b[0m\n", .{});
+    }
 }

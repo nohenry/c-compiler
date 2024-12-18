@@ -9,6 +9,7 @@ const TokenIndexType = @import("tokenizer.zig").TokenIndexType;
 const Node = @import("parser.zig").Node;
 const NodeIndex = @import("parser.zig").NodeIndex;
 const ty = @import("types.zig");
+const diag = @import("diagnostics.zig");
 
 pub const DefineValue = struct {
     name_tok: TokenIndex,
@@ -31,10 +32,15 @@ pub const File = struct {
     tokens: std.ArrayList(Token),
 };
 
+pub const Config = struct {
+    debug_trace: bool,
+};
+
 pub const Unit = struct {
     allocator: std.mem.Allocator,
     type_names: std.StringHashMap(void),
     files: std.ArrayList(File),
+    config: Config,
 
     token_end_range: std.AutoHashMap(TokenIndex, u32),
     nodes: std.ArrayList(Node),
@@ -53,9 +59,11 @@ pub const Unit = struct {
 
     include_dirs: std.ArrayList([]const u8),
 
+    diagnostics: std.ArrayList(diag.Diagnostic),
+
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator, config: Config) Self {
         const files = std.ArrayList(File).init(allocator);
         // files.append(.{
         //     .file_path = file_path,
@@ -75,6 +83,7 @@ pub const Unit = struct {
             .files = files,
             .type_names = type_names,
             .token_end_range = std.AutoHashMap(TokenIndex, u32).init(allocator),
+            .config = config,
 
             .nodes = std.ArrayList(Node).init(allocator),
             .node_ranges = std.ArrayList(NodeIndex).init(allocator),
@@ -88,7 +97,12 @@ pub const Unit = struct {
             .defines = std.StringHashMap(DefineValue).init(allocator),
             .define_fns = std.StringHashMap(DefineFunction).init(allocator),
             .include_dirs = include_dirs,
+            .diagnostics = .init(allocator),
         };
+    }
+
+    pub fn addDiagnostic(self: *Unit, diagnostic: diag.Diagnostic) void {
+        self.diagnostics.append(diagnostic) catch @panic("OOM");
     }
 
     pub inline fn filePos(self: *const Unit, tidx: TokenIndex) struct { []const u8, u32 } {
@@ -238,6 +252,14 @@ pub const Unit = struct {
         return source[tok.start .. tok.start + length];
     }
 
+    pub fn tokenSourceSliceRange(self: *Unit, range: TokenRange) []const u8 {
+        const source = self.files.items[range.start.file_index].source;
+        const length = self.tokenLength(range.end);
+        const tok_start = self.token(range.start);
+        const tok_end = self.token(range.end);
+        return source[tok_start.start .. tok_end.start + length];
+    }
+
     pub fn tokenLength(self: *const Unit, tidx: TokenIndex) u32 {
         const source = self.files.items[tidx.file_index].source;
         const tok = self.token(tidx);
@@ -359,6 +381,12 @@ pub const Unit = struct {
                         else => break,
                     }
                 }
+            },
+            .string_literal => {
+                return self.stringLength(tidx);
+            },
+            .stringified_literal => {
+                return self.stringifiedLength(tidx);
             },
             .identifier, .type_name => {
                 while (index < source.len) : (index += 1) {
@@ -775,6 +803,32 @@ pub const Unit = struct {
         var line_start: usize = 0;
         var i: usize = 0;
         while (i < tok.start) : (i += 1) {
+            switch (file.source[i]) {
+                '\n' => {
+                    line += 1;
+                    line_start = i + 1;
+                },
+                else => {},
+            }
+        }
+        while (i < file.source.len and file.source[i] != '\n') {
+            i += 1;
+        }
+
+        return .{
+            .line = line,
+            .line_start = line_start,
+            .line_end = i,
+        };
+    }
+
+    pub fn findLineInfoFpos(self: *const Unit, file_index: FileIndex, pos: u32) LineInfo {
+        const file = &self.files.items[file_index];
+
+        var line: usize = 0;
+        var line_start: usize = 0;
+        var i: usize = 0;
+        while (i < pos) : (i += 1) {
             switch (file.source[i]) {
                 '\n' => {
                     line += 1;

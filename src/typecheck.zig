@@ -906,7 +906,9 @@ pub const TypeChecker = struct {
                 break :blk self.unit.interner.typeTy(ty, 0);
             },
             else => {
-                std.log.warn("Skipping node {} of kind: {}", .{ nidx, self.unit.nodes.items[nidx].kind });
+                if (self.unit.config.debug_trace) {
+                    std.log.warn("Skipping node {} of kind: {}", .{ nidx, self.unit.nodes.items[nidx].kind });
+                }
                 return self.unit.interner.voidTy();
             },
         };
@@ -1207,7 +1209,9 @@ pub const TypeChecker = struct {
             },
 
             else => {
-                std.log.warn("Skipping node {} of type {}", .{ nidx, self.unit.nodes.items[nidx].kind });
+                if (self.unit.config.debug_trace) {
+                    std.log.warn("Skipping node {} of type {}", .{ nidx, self.unit.nodes.items[nidx].kind });
+                }
                 return self.unit.interner.voidTy();
             },
         };
