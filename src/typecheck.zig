@@ -7,6 +7,7 @@ const TypeFlags = @import("types.zig").TypeFlags;
 const TokenKind = @import("tokenizer.zig").TokenKind;
 const TokenIndex = @import("tokenizer.zig").TokenIndex;
 const TypeQualifier = @import("parser.zig").TypeQualifier;
+const StorageClass = @import("parser.zig").StorageClass;
 
 pub const BuiltinsType = struct {
     pub const map = std.StaticStringMap(*const fn (*Unit) (std.mem.Allocator.Error)!Type).initComptime(blk: {
@@ -48,10 +49,19 @@ pub const BuiltinsType = struct {
             try __builtin_va_list(unit),
         }, unit.interner.voidTy(), false);
     }
+
+    pub fn __int128_t(unit: *Unit) !Type {
+        return unit.interner.int128Ty(true, 0);
+    }
+
+    pub fn __uint128_t(unit: *Unit) !Type {
+        return unit.interner.int128Ty(true, 0);
+    }
 };
 
 pub const TypeChecker = struct {
     unit: *Unit,
+    storage_class: ?StorageClass.Type = null,
 
     const Self = @This();
 
@@ -795,7 +805,10 @@ pub const TypeChecker = struct {
                 var next_index = node.data.as(.two).a;
                 const count = node.data.as(.four).c;
                 const storage = node.data.as(.eight).g;
-                _ = storage;
+
+                const old_sc = self.storage_class;
+                defer self.storage_class = old_sc;
+                self.storage_class = storage;
 
                 const end_index = next_index + count;
                 while (next_index != end_index) : (next_index += 1) {
@@ -838,8 +851,11 @@ pub const TypeChecker = struct {
                 const var_type = try self.checkNodeType(type_index);
                 self.unit.declared_type.put(nidx, var_type) catch @panic("OOM");
 
-                if (var_type.isIncomplete()) {
-                    std.debug.panic("Variable has incomplete type! (Attempted to use struct or union before it was declared)", .{});
+                if ((self.storage_class.? & StorageClass.typedef) == 0 and var_type.isIncomplete()) {
+                    std.debug.panic("Variable has incomplete type! (Attempted to use struct or union before it was declared) {s}: {s}", .{
+                        ident_str,
+                        self.unit.interner.printTyToStr(var_type, self.unit.allocator),
+                    });
                 }
 
                 return self.unit.interner.voidTy();

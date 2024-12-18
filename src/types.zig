@@ -20,6 +20,7 @@ pub const TypeKind = struct {
         int: bool,
         long: bool,
         longlong: bool,
+        int128: bool,
         float: void,
         double: void,
         longdouble: void,
@@ -323,6 +324,10 @@ pub const TypeInterner = struct {
 
     pub fn longlongTy(self: *Self, signed: bool, qualifiers: TypeQualifier.Type) Type {
         return self.createOrGetTy(.{ .longlong = signed }, qualifiers);
+    }
+
+    pub fn int128Ty(self: *Self, signed: bool, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.{ .int128 = signed }, qualifiers);
     }
 
     pub fn floatTy(self: *Self, qualifiers: TypeQualifier.Type) Type {
@@ -648,6 +653,11 @@ pub const TypeInterner = struct {
                 try writer.print("long long", .{})
             else
                 try writer.print("unsigned long long", .{}),
+
+            .int128 => |sign| if (sign)
+                try writer.print("__int128_t", .{})
+            else
+                try writer.print("__uint128_t", .{}),
 
             .float => try writer.print("float", .{}),
             .double => try writer.print("double", .{}),

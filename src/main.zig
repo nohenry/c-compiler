@@ -624,7 +624,7 @@ pub fn main() !void {
     for (0..unit_range.count) |i| {
         const node_index = unit.node_ranges.items[i + unit_range.start];
         _ = try typechecker.checkNode(node_index, null);
-        try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, true, writer);
+        // try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, true, writer);
     }
 
     var codegen = try cg.CodeGenerator.init(&unit);
@@ -643,7 +643,6 @@ pub fn main() !void {
     } else {
         try codegen.writeToFile(output_file orelse "a.out");
     }
-
 
     std.debug.print("\x1b[1;32mFinished Compiling\x1b[0m\n", .{});
     // builder.write

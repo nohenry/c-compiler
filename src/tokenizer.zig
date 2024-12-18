@@ -3,9 +3,16 @@ const Unit = @import("unit.zig").Unit;
 const DefineValue = @import("unit.zig").DefineValue;
 const Parser = @import("parser.zig").Parser;
 
+const TokenizeError = error{
+    InvalidCharacter,
+};
+
 pub const TokenKind = enum(u32) {
     float_literal,
     double_literal,
+    decimal32_literal,
+    decimal64_literal,
+    decimal128_literal,
     int_literal,
     unsigned_int_literal,
     long_literal,
@@ -69,6 +76,7 @@ pub const TokenKind = enum(u32) {
     carot_eq,
     pipe_eq,
     question,
+    at,
 
     dot,
     arrow,
@@ -171,6 +179,7 @@ pub const TokenKind = enum(u32) {
             .colon => ":",
             .question => "?",
             .ellipsis => "...",
+            .at => "@",
 
             .assignment => "=",
             .plus_eq => "+=",
@@ -377,6 +386,20 @@ pub const FileTokenizer = struct {
             @truncate(self.tokenizer.unit.tokens(file_index).items.len - 1);
     }
 
+    pub fn currentVirtualEmpty(self: *Self) bool {
+        return self.tokenizer.virtual_stack.items.len == 0 or blk: {
+            const last = self.tokenizer.virtual_stack.getLast();
+            break :blk last.start.index == last.end.index;
+        };
+    }
+
+    pub fn currentTokenRangeFlags(self: *const Self) TokenRange.Flags.Type {
+        if (self.tokenizer.virtual_stack.getLastOrNull()) |vs| {
+            return vs.flags;
+        }
+        return 0;
+    }
+
     pub fn nextVirtual(self: *Self) struct { ?TokenIndex, bool } {
         while (self.tokenizer.virtual_stack.items.len > 0) : (self.tokenizer.virtual_stack.items.len -= 1) {
             const item_index = self.tokenizer.virtual_stack.getLast();
@@ -518,6 +541,17 @@ pub const FileTokenizer = struct {
             break :blk null;
         } else null;
 
+        var disabled = false;
+        if (self.currentVirtualEmpty()) {
+            if (last_token) |last_tidx| {
+                if (self.checkIsIdentifier(last_tidx)) |ident_str| {
+                    if (self.tokenizer.disabled_macros.contains(ident_str)) {
+                        disabled = true;
+                    }
+                }
+            }
+        }
+
         const virt = self.nextVirtual();
         if (virt[1]) return virt[0];
         const tidx = virt[0] orelse {
@@ -532,7 +566,7 @@ pub const FileTokenizer = struct {
 
             if (last_token) |last_tidx| {
                 if (self.checkIsIdentifier(last_tidx)) |ident_str| blk: {
-                    if (self.tokenizer.disabled_macros.contains(ident_str)) {
+                    if (disabled or self.tokenizer.disabled_macros.contains(ident_str)) {
                         break :blk;
                     }
                     // const last_ex_tok = self.tokenizer.expansion_name_token_stack.getLastOrNull();
@@ -542,6 +576,7 @@ pub const FileTokenizer = struct {
                     //         break :blk;
                     //     }
                     // }
+                    std.log.warn("noooooooo {s}", .{ident_str});
                     if (self.checkExpansion(ident_str)) {
                         return self.resolveVirtual(null, null);
                     }
@@ -596,6 +631,7 @@ pub const FileTokenizer = struct {
                         //         break :blk;
                         //     }
                         // }
+                        std.log.warn("vhk {s}", .{ident_str});
                         if (self.tokenizer.disabled_macros.contains(ident_str)) {
                             break :blk;
                         }
@@ -745,6 +781,7 @@ pub const FileTokenizer = struct {
                     //         break :blk;
                     //     }
                     // }
+                    std.log.warn("vhk {s}", .{ident_str});
                     if (self.tokenizer.disabled_macros.contains(ident_str)) {
                         break :blk;
                     }
@@ -769,6 +806,7 @@ pub const FileTokenizer = struct {
                     }
 
                     if (self.checkIsIdentifier(last_tidx)) |ident_str| blk: {
+                        std.log.warn("vhk {s}", .{ident_str});
                         // const last_ex_tok = self.tokenizer.expansion_name_token_stack.getLastOrNull();
                         // if (last_ex_tok) |let| {
                         //     const last_ident_str = self.tokenizer.unit.identifierAt(let);
@@ -884,10 +922,10 @@ pub const FileTokenizer = struct {
             switch (c) {
                 ' ', '\t', '\r' => continue,
                 '\\' => {
-                    if (eol) {
-                        while (self.isNot(0, '\n')) : (self.pos += 1) {}
-                        continue;
-                    } else break;
+                    while (self.isNot(0, '\n')) : (self.pos += 1) {}
+                    continue;
+                    // if (eol) {
+                    // } else break;
                 },
                 '\n' => {
                     if (eol) {
@@ -929,7 +967,12 @@ pub const FileTokenizer = struct {
                     return null;
             }
 
-            if (self.nextNonPhantom()) |value| {
+            const tok = self.nextNonPhantom() catch {
+                std.log.err("Invalid character '{c}'", .{self.source[self.pos]});
+                self.pos += 1;
+                return null;
+            };
+            if (tok) |value| {
                 return value;
             }
             if (self.included_file) {
@@ -1042,6 +1085,7 @@ pub const FileTokenizer = struct {
                 defer tokens.deinit();
                 defer expanded_tokens.deinit();
                 var last_token: ?TokenIndex = null;
+                var last_token_flags: TokenRange.Flags.Type = 0;
                 var range_count: TokenIndexType = 0;
                 const old_define = self.tokenizer.in_define;
                 defer self.tokenizer.in_define = old_define;
@@ -1049,6 +1093,7 @@ pub const FileTokenizer = struct {
 
                 while (self.tokenizer.next(false)) |pidx| {
                     const p = self.tokenizer.unit.token(pidx);
+                    const flags = self.currentTokenRangeFlags();
 
                     switch (p.kind) {
                         .open_paren, .open_brace, .open_bracket => indent += 1,
@@ -1060,40 +1105,48 @@ pub const FileTokenizer = struct {
                                         range_count = 0;
                                     }
 
-                                    const vs_len_start = self.tokenizer.virtual_stack.items.len;
-                                    var unexp_i = tokens.items.len;
-                                    while (unexp_i > 0) {
-                                        unexp_i -= 1;
-                                        self.tokenizer.pushVirtual(tokens.items[unexp_i]);
-                                    }
-
-                                    last_token = null;
-                                    range_count = 0;
-                                    while (self.tokenizer.virtual_stack.items.len >= vs_len_start + 1) {
-                                        const vtok = self.resolveVirtual(null, null);
-                                        if (vtok == null) break;
-                                        if (last_token) |ltidx| {
-                                            if (ltidx.file_index == vtok.?.file_index and vtok.?.index == ltidx.index + 1) {
-                                                range_count += 1;
-                                            } else {
-                                                expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
-                                                range_count = 1;
-                                            }
-                                        } else {
-                                            range_count += 1;
+                                    if ((last_token_flags & TokenRange.Flags.ALREADY_EXPANDED) == 0) {
+                                        const vs_len_start = self.tokenizer.virtual_stack.items.len;
+                                        var unexp_i = tokens.items.len;
+                                        while (unexp_i > 0) {
+                                            unexp_i -= 1;
+                                            self.tokenizer.pushVirtual(tokens.items[unexp_i]);
                                         }
-                                        last_token = vtok;
-                                    }
 
-                                    if (last_token) |ltidx| {
-                                        expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
+                                        last_token = null;
+                                        range_count = 0;
+                                        while (self.tokenizer.virtual_stack.items.len >= vs_len_start + 1) {
+                                            const vtok = self.resolveVirtual(null, null);
+                                            if (vtok == null) break;
+                                            if (last_token) |ltidx| {
+                                                if (ltidx.file_index == vtok.?.file_index and vtok.?.index == ltidx.index + 1) {
+                                                    range_count += 1;
+                                                } else {
+                                                    expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
+                                                    range_count = 1;
+                                                }
+                                            } else {
+                                                range_count += 1;
+                                            }
+                                            last_token = vtok;
+                                        }
+
+                                        if (last_token) |ltidx| {
+                                            var expanded_token_range = TokenRange.initEndCount(ltidx, range_count);
+                                            expanded_token_range.flags |= TokenRange.Flags.ALREADY_EXPANDED;
+                                            expanded_tokens.append(expanded_token_range) catch @panic("OOM");
+                                        }
                                     }
                                     last_token = null;
                                     range_count = 0;
 
+                                    const tokens_slice = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM");
                                     const arg = Argument{
-                                        .tokens = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM"),
-                                        .expanded_tokens = self.tokenizer.allocator.dupe(TokenRange, expanded_tokens.items) catch @panic("OOM"),
+                                        .tokens = tokens_slice,
+                                        .expanded_tokens = if ((last_token_flags & TokenRange.Flags.ALREADY_EXPANDED) == 0)
+                                            self.tokenizer.allocator.dupe(TokenRange, expanded_tokens.items) catch @panic("OOM")
+                                        else
+                                            tokens_slice,
                                     };
                                     if (parameter_iter.next()) |param| {
                                         argument_map.put(param.key_ptr.*, arg) catch @panic("OOM");
@@ -1116,40 +1169,46 @@ pub const FileTokenizer = struct {
                                         range_count = 0;
                                     }
 
-                                    const vs_len_start = self.tokenizer.virtual_stack.items.len;
-                                    var unexp_i = tokens.items.len;
-                                    while (unexp_i > 0) {
-                                        unexp_i -= 1;
-                                        self.tokenizer.pushVirtual(tokens.items[unexp_i]);
-                                    }
-
-                                    last_token = null;
-                                    range_count = 0;
-                                    while (self.tokenizer.virtual_stack.items.len >= vs_len_start + 1) {
-                                        const vtok = self.resolveVirtual(null, null);
-                                        if (vtok == null) break;
-                                        if (last_token) |ltidx| {
-                                            if (ltidx.file_index == vtok.?.file_index and vtok.?.index == ltidx.index + 1) {
-                                                range_count += 1;
-                                            } else {
-                                                expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
-                                                range_count = 1;
-                                            }
-                                        } else {
-                                            range_count += 1;
+                                    if ((last_token_flags & TokenRange.Flags.ALREADY_EXPANDED) == 0) {
+                                        const vs_len_start = self.tokenizer.virtual_stack.items.len;
+                                        var unexp_i = tokens.items.len;
+                                        while (unexp_i > 0) {
+                                            unexp_i -= 1;
+                                            self.tokenizer.pushVirtual(tokens.items[unexp_i]);
                                         }
-                                        last_token = vtok;
-                                    }
 
-                                    if (last_token) |ltidx| {
-                                        expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
+                                        last_token = null;
+                                        range_count = 0;
+                                        while (self.tokenizer.virtual_stack.items.len >= vs_len_start + 1) {
+                                            const vtok = self.resolveVirtual(null, null);
+                                            if (vtok == null) break;
+                                            if (last_token) |ltidx| {
+                                                if (ltidx.file_index == vtok.?.file_index and vtok.?.index == ltidx.index + 1) {
+                                                    range_count += 1;
+                                                } else {
+                                                    expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
+                                                    range_count = 1;
+                                                }
+                                            } else {
+                                                range_count += 1;
+                                            }
+                                            last_token = vtok;
+                                        }
+
+                                        if (last_token) |ltidx| {
+                                            expanded_tokens.append(TokenRange.initEndCount(ltidx, range_count)) catch @panic("OOM");
+                                        }
                                     }
                                     last_token = null;
                                     range_count = 0;
 
+                                    const tokens_slice = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM");
                                     const arg = Argument{
-                                        .tokens = self.tokenizer.allocator.dupe(TokenRange, tokens.items) catch @panic("OOM"),
-                                        .expanded_tokens = self.tokenizer.allocator.dupe(TokenRange, expanded_tokens.items) catch @panic("OOM"),
+                                        .tokens = tokens_slice,
+                                        .expanded_tokens = if ((last_token_flags & TokenRange.Flags.ALREADY_EXPANDED) == 0)
+                                            self.tokenizer.allocator.dupe(TokenRange, expanded_tokens.items) catch @panic("OOM")
+                                        else
+                                            tokens_slice,
                                     };
                                     argument_map.put(param.?.key_ptr.*, arg) catch @panic("OOM");
 
@@ -1175,6 +1234,7 @@ pub const FileTokenizer = struct {
                     }
 
                     last_token = pidx;
+                    last_token_flags = flags;
                     i += 1;
                 }
             }
@@ -1213,21 +1273,28 @@ pub const FileTokenizer = struct {
     /// Returns the token index, or null if we're out of tokens.
     /// Also returns null if included file and we handle above
     /// I think might return null in some other cases
-    fn nextNonPhantom(self: *Self) ?TokenIndex {
+    fn nextNonPhantom(self: *Self) TokenizeError!?TokenIndex {
         const c = self.source[self.pos];
         const start = self.pos;
         const token_kind = blk: {
             switch (c) {
                 '0'...'9' => {
-                    const IS_FLOAT: u8 = (1 << 0);
-                    const DID_DOT: u8 = (1 << 1);
-                    const DID_E: u8 = (1 << 2);
-                    const SIZE: u8 = (1 << 3);
-                    const LONG: u8 = (1 << 4);
-                    const LONGLONG: u8 = (1 << 5);
-                    const UNSIGNED: u8 = (1 << 6);
+                    const IS_FLOAT: u16 = (1 << 0);
+                    const DID_DOT: u16 = (1 << 1);
+                    const DID_E: u16 = (1 << 2);
+                    const DID_P: u16 = (1 << 3);
+                    const SIZE: u16 = (1 << 4);
+                    const LONG: u16 = (1 << 5);
+                    const LONGLONG: u16 = (1 << 6);
+                    const UNSIGNED: u16 = (1 << 7);
+                    const DEC32: u16 = (1 << 8);
+                    const DEC64: u16 = (1 << 9);
+                    const DEC128: u16 = (1 << 10);
+                    _ = DEC32;
+                    _ = DEC64;
+                    _ = DEC128;
                     var base: u8 = if (c == '0') 8 else 10;
-                    var flags: u8 = 0;
+                    var flags: u16 = 0;
                     while (self.pos < self.source_len) : (self.pos += 1) doneLit: {
                         switch (self.source[self.pos]) {
                             '\'', '_' => continue,
@@ -1242,8 +1309,16 @@ pub const FileTokenizer = struct {
                                     continue;
                                 }
                                 if ((flags & DID_E) > 0) break :doneLit;
+                                if ((flags & DID_P) > 0) break :doneLit;
 
                                 flags |= DID_E;
+                                flags |= IS_FLOAT;
+                            },
+                            'p', 'P' => {
+                                if ((flags & DID_E) > 0) break :doneLit;
+                                if ((flags & DID_P) > 0) break :doneLit;
+
+                                flags |= DID_P;
                                 flags |= IS_FLOAT;
                             },
                             'b', 'B' => |x| {
@@ -1258,9 +1333,8 @@ pub const FileTokenizer = struct {
                                 }
                             },
                             'x', 'X' => |x| {
-                                if ((flags & IS_FLOAT) > 0) {
-                                    continue;
-                                } else if (base == 8 and self.pos == start + 1) {
+                                // we allow floats to have hex start
+                                if (base == 8 and self.pos == start + 1) {
                                     base = 16;
                                 } else {
                                     std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
@@ -1285,6 +1359,7 @@ pub const FileTokenizer = struct {
                             'A', 'C', 'D', 'F'...'K' => |x| if (base > 10 and x - 'A' < base - 10) {
                                 continue;
                             } else if (x == 'F') {
+                                flags |= IS_FLOAT;
                                 break;
                             } else {
                                 std.debug.panic("Found \x1b[1;36m'{c}'\x1b[0m which is invalid for base \x1b[1;33m{}\x1b[0m", .{ x, base });
@@ -1295,8 +1370,13 @@ pub const FileTokenizer = struct {
 
                     while (self.pos < self.source_len) : (self.pos += 1) {
                         switch (self.source[self.pos]) {
-                            'f' => {
+                            'f', 'F' => {
                                 self.pos += 1;
+                                if ((flags & IS_FLOAT) > 0 and base == 16) {
+                                    if ((flags & DID_P) == 0) {
+                                        std.debug.panic("Expected exponent with p or P after hex float literal!", .{});
+                                    }
+                                }
                                 break :blk TokenKind.float_literal;
                             },
                             'u', 'U' => {
@@ -1321,7 +1401,12 @@ pub const FileTokenizer = struct {
                         }
                     }
 
-                    if ((flags & IS_FLOAT) > 0)
+                    if ((flags & IS_FLOAT) > 0 and base == 16) {
+                        if ((flags & DID_P) == 0) {
+                            std.debug.panic("Expected exponent with p or P after hex float literal!", .{});
+                        }
+                        break :blk TokenKind.double_literal;
+                    } else if ((flags & IS_FLOAT) > 0)
                         break :blk TokenKind.double_literal
                     else if ((flags & (LONGLONG | UNSIGNED)) > 0)
                         break :blk TokenKind.unsigned_long_long_literal
@@ -1490,6 +1575,7 @@ pub const FileTokenizer = struct {
                     }
                     break :blk self.advanceToken(.gt);
                 },
+                '@' => break :blk self.advanceToken(.at),
 
                 'a'...'z', 'A'...'Z', '_' => {
                     while (self.pos < self.source_len) : (self.pos += 1) {
@@ -1858,7 +1944,7 @@ pub const FileTokenizer = struct {
                     return null;
                     // return self.tokenizer.next(false);
                 },
-                else => return null,
+                else => return error.InvalidCharacter,
             }
         };
 
@@ -1915,6 +2001,7 @@ pub const FileTokenizer = struct {
             .colon,
             .question,
             .hash,
+            .at,
             => self.pos += 1,
 
             .plusplus,

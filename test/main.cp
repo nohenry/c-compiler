@@ -1,36 +1,38 @@
-// #include <iconv.h>
-// #include <time.h>
-#include <stdarg.h>
-// #include <sys/cdefs.h>
+// #include <string.h>
+// #include <stdlib.h>
+// #include <signal.h>
 
-// extern long timezone __asm("foobar");
-int printf(const char *c, ...);
+// #define STR(x) #x
 
-int args(int count, ...) {
-    va_list v;
-    va_start(v, count);
-    int i1 = va_arg(v, int);
-    printf("%d ", i1);
-    int i2 = va_arg(v, int);
-    printf("%d ", i2);
-    va_end(v);
-    return 34;
-}
+// char *a = STR(@foo), *b = "@foo";
 
+// typedef int foo;
 
-// typedef struct foo *bar;
-// bar dobar() {
-// }
+// void (*signal(int, void (*)(int)))(int);
+// void (*signal(int, void (*)(int)))(int);
+// signal(int, void (*)(int))
 
-// int *bar[2];
+// sighandler_t;
+typedef void (*sighandler_t)(int);
+sighandler_t (*signal1)(int, sighandler_t);
+// void (*signal)(int);
 
-int main() {
-    args(1, 2, 69);
-    // printf("%c %d\n", 'c', 3);
-    // fpos_t f;
-    // iconv_t cd;
-    // cd = iconv_open ("IBM1047", "UTF-8");
-    // if (cd == (iconv_t) -1)
-    //     return 1;
+void (* (*signal) (int, void (*)(int)) ) (int);
+void (* signa2 (int, void (*)(int)) ) (int);
+void *foo1;
+void *foo2();
+void (*foo3)();
+
+int main(void)
+{
+
+    // signal();
+    // foo bar;
+    // malloc_type_posix_memalign
+    // malloc(0);
+    // malloc_zone_t *f;
+    //   if (strcmp (a, b))
+    // abort ();
     return 0;
 }
+// char array[(a2(f)) == 10 ? 1 : -1];

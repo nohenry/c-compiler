@@ -1806,7 +1806,7 @@ pub const Parser = struct {
                     .node_insert = element_type.node_insert orelse new_node_insert,
                     .is_function = element_type.is_function,
                     .is_function_ptr = element_type.is_function_ptr,
-                    .is_pointer = true,
+                    .is_pointer = !element_type.is_function,
                 };
             },
             else => return try self.parseDirectDeclarator(base_type, identifier),
@@ -1831,7 +1831,7 @@ pub const Parser = struct {
 
                 if (ntok != null and (ntok.?.token.kind == .star or ntok.?.token.kind == .identifier)) {
                     const new_base = try self.parseDeclarator(last_type, null, identifier);
-                    const new_new_base = try self.parseDirectDeclarator(new_base.node.?, identifier);
+                    // const new_new_base = try self.parseDirectDeclarator(new_base.node.?, identifier);
                     _ = try self.expect(.close_paren);
 
                     const child = try self.parseDirectDeclarator(last_type, identifier);
@@ -1840,15 +1840,25 @@ pub const Parser = struct {
                     const node_data = &self.unit.nodes.items[ni.nidx].data;
                     std.debug.assert(ni.data_field == .a);
                     switch (ni.data_size) {
-                        .four => node_data.four.a = self.relativeOffset(ni.nidx),
+                        .four => node_data.four.a = @panic("todo"),
                         .two => node_data.two.a = @truncate(child.node.?),
                         else => @panic("invalid"),
                     }
 
+                    // if (identifier.* != null) {
+                    //     const ident_str = self.unit.identifierAt(identifier.*.?);
+                    //     std.log.debug("{s}", .{ident_str});
+                    // } else {
+                    //     std.log.debug("ident", .{});
+                    // }
+                    // std.debug.print("\tchild: {}\n", .{child});
+                    // std.debug.print("\tnew_base: {}\n", .{new_base});
+                    // std.debug.print("\tnew_new_base: {}\n", .{new_new_base});
                     return DeclaratorResult{
-                        .node = new_new_base.node.?,
-                        .is_function = child.is_function,
-                        .is_function_ptr = child.is_function and (new_new_base.is_pointer or new_base.is_pointer),
+                        .node = new_base.node.?,
+                        // .node = new_new_base.node.?,
+                        .is_function = new_base.is_function,
+                        .is_function_ptr = child.is_function and !new_base.is_function,
                     };
                 } else {
                     return DeclaratorResult{

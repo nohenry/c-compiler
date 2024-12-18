@@ -66,11 +66,14 @@ pub const Unit = struct {
         var include_dirs = std.ArrayList([]const u8).init(allocator);
         include_dirs.append("/opt/homebrew/Cellar/llvm/19.1.4/lib/clang/19/include") catch @panic("OOM");
         include_dirs.append("/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk/usr/include") catch @panic("OOM");
+        var type_names = std.StringHashMap(void).init(allocator);
+        type_names.put("__int128_t", {}) catch @panic("OOM");
+        type_names.put("__uint128_t", {}) catch @panic("OOM");
 
         return .{
             .allocator = allocator,
             .files = files,
-            .type_names = std.StringHashMap(void).init(allocator),
+            .type_names = type_names,
             .token_end_range = std.AutoHashMap(TokenIndex, u32).init(allocator),
 
             .nodes = std.ArrayList(Node).init(allocator),
@@ -256,10 +259,11 @@ pub const Unit = struct {
                 const IS_FLOAT: u8 = (1 << 0);
                 const DID_DOT: u8 = (1 << 1);
                 const DID_E: u8 = (1 << 2);
-                const SIZE: u8 = (1 << 3);
-                const LONG: u8 = (1 << 4);
-                const LONGLONG: u8 = (1 << 5);
-                const UNSIGNED: u8 = (1 << 6);
+                const DID_P: u8 = (1 << 3);
+                const SIZE: u8 = (1 << 4);
+                const LONG: u8 = (1 << 5);
+                const LONGLONG: u8 = (1 << 6);
+                const UNSIGNED: u8 = (1 << 7);
                 var base: u8 = if (source[index] == '0') 8 else 10;
                 var flags: u8 = 0;
                 while (index < source.len) : (index += 1) doneLit: {
@@ -273,8 +277,16 @@ pub const Unit = struct {
                         },
                         'e' => {
                             if ((flags & DID_E) > 0) break :doneLit;
+                            if ((flags & DID_P) > 0) break :doneLit;
 
                             flags |= DID_E;
+                            flags |= IS_FLOAT;
+                        },
+                        'p' => {
+                            if ((flags & DID_E) > 0) break :doneLit;
+                            if ((flags & DID_P) > 0) break :doneLit;
+
+                            flags |= DID_P;
                             flags |= IS_FLOAT;
                         },
                         'b', 'B' => |x| {
@@ -428,27 +440,69 @@ pub const Unit = struct {
         var mult: f64 = 0.0;
         var didDot = false;
         var didE = false;
+        var didP = false;
+        var base: u8 = 10;
         while (index < source.len) : (index += 1) {
             switch (source[index]) {
-                '0'...'9' => |c| {
+                '0' => {
                     if (didDot) {
-                        fract /= 10.0;
-                        fract += (@as(f64, @floatFromInt(c - '0')) / 10.0);
-                    } else if (didE) {
-                        mult *= 10.0;
-                        mult += @as(f64, @floatFromInt(c - '0'));
+                        fract /= @floatFromInt(base);
+                    } else if (didE or didP) {
+                        mult *= @floatFromInt(base);
                     } else {
-                        sum *= 10.0;
-                        sum += @as(f64, @floatFromInt(c - '0'));
+                        sum *= @floatFromInt(base);
                     }
                 },
-                'e' => didE = true,
+                '1'...'9' => |x| if (x - '0' < base) {
+                    if (didDot) {
+                        fract /= @floatFromInt(base);
+                        fract += (@as(f64, @floatFromInt(x - '0')) / @as(f64, @floatFromInt(base)));
+                    } else if (didE or didP) {
+                        mult *= @floatFromInt(base);
+                        mult += @as(f64, @floatFromInt(x - '0'));
+                    } else {
+                        sum *= @floatFromInt(base);
+                        sum += @as(f64, @floatFromInt(x - '0'));
+                    }
+                },
+                'a', 'c', 'd'...'k' => |x| if (base > 10 and x - 'a' < base - 10) {
+                    if (didDot) {
+                        fract /= @floatFromInt(base);
+                        fract += (@as(f64, @floatFromInt(x - 'a' + 10)) / @as(f64, @floatFromInt(base)));
+                    } else if (didP) {
+                        mult *= @floatFromInt(base);
+                        mult += @as(f64, @floatFromInt(x - 'a' + 10));
+                    } else {
+                        sum *= @floatFromInt(base);
+                        sum += @as(f64, @floatFromInt(x - 'a' + 10));
+                    }
+                } else if (base == 10 and x == 'e') {
+                    didE = true;
+                },
+                'A', 'C', 'D'...'K' => |x| if (base > 10 and x - 'A' < base - 10) {
+                    if (didDot) {
+                        fract /= @floatFromInt(base);
+                        fract += (@as(f64, @floatFromInt(x - 'A' + 10)) / @as(f64, @floatFromInt(base)));
+                    } else if (didP) {
+                        mult *= @floatFromInt(base);
+                        mult += @as(f64, @floatFromInt(x - 'A' + 10));
+                    } else {
+                        sum *= @floatFromInt(base);
+                        sum += @as(f64, @floatFromInt(x - 'A' + 10));
+                    }
+                } else if (base == 10 and x == 'E') {
+                    didE = true;
+                },
+                'p', 'P' => didP = true,
                 '.' => didDot = true,
+                'x', 'X' => {
+                    base = 16;
+                },
                 else => break,
             }
         }
 
-        if (didE)
+        if (didE or didP)
             return (sum + fract) * std.math.pow(f64, 10.0, mult)
         else
             return (sum + fract);
@@ -748,9 +802,9 @@ pub const Unit = struct {
 
         std.debug.print("At \x1b[1m{s}\x1b[0m line \x1b[1m{}\x1b[0m\n", .{ file.file_path, lc.line });
         const begin = file.source[lc.line_start..tok.start];
-        const mid = file.source[tok.start..tok.start+token_length];
-        const end = file.source[tok.start+token_length..lc.line_end];
-        std.debug.print("{}: \x1b[32m{s}\x1b[0;1;31m{s}\x1b[0;32m{s}\x1b[0m\n", .{lc.line, begin, mid, end});
+        const mid = file.source[tok.start .. tok.start + token_length];
+        const end = file.source[tok.start + token_length .. lc.line_end];
+        std.debug.print("{}: \x1b[32m{s}\x1b[0;1;31m{s}\x1b[0;32m{s}\x1b[0m\n", .{ lc.line, begin, mid, end });
     }
 
     //     pub inline fn getOrPut(self: *Self, string: []const u8) !StringInterner.Index {
