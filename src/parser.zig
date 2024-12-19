@@ -5,7 +5,11 @@ const tok = @import("tokenizer.zig");
 const Tokenizer = tok.Tokenizer;
 const TokenIndex = tok.TokenIndex;
 
-pub const ParseError = error{ OutOfTokens, UnexpectedToken };
+pub const ParseError = error{
+    UnexpectedEnd,
+    UnexpectedToken,
+    DiscardedNode,
+};
 
 pub const NodeKind = enum(u32) {
     empty,
@@ -89,7 +93,9 @@ pub const NodeKind = enum(u32) {
     signed,
 
     void_type,
-    complex_type,
+    float_complex_type,
+    double_complex_type,
+    long_double_complex_type,
     imaginary_type,
 
     /// []
@@ -238,6 +244,7 @@ pub const NodeKind = enum(u32) {
     /// node_data: a(u32) = index of condition, b(u32) = index of else body
     if_statement_no_body_else,
     empty_statement,
+    poison,
 
     /// Represents Node Range
     /// node_data: a = start, b = end
@@ -527,7 +534,9 @@ pub const Node = extern struct {
             .unsigned,
             .signed,
             .void_type,
-            .complex_type,
+            .float_complex_type,
+            .double_complex_type,
+            .long_double_complex_type,
             .imaginary_type,
             => {
                 const qualifier = self.data.as(.eight).h;
@@ -1161,7 +1170,9 @@ pub const Node = extern struct {
             .unsigned => "unsigned",
             .signed => "signed",
             .void_type => "void",
-            .complex_type => "complex",
+            .float_complex_type => "float complex",
+            .double_complex_type => "double complex",
+            .long_double_complex_type => "long double complex",
             .imaginary_type => "imaginary",
             else => @panic(""),
         };
@@ -1356,9 +1367,13 @@ pub const Parser = struct {
         const type_node = try self.parseDeclarationSpecifiers(&storage_class, &attribute_data);
         ptok = self.peekToken();
 
+        var iteration: u32 = 0;
         var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
         defer these_nodes.deinit();
-        while (ptok) |p| : (ptok = self.peekToken()) {
+        while (ptok) |p| : ({
+            ptok = self.peekToken();
+            iteration += 1;
+        }) {
             var front_attribute: ?NodeData = null;
             switch (p.token.kind) {
                 .identifier => {
@@ -1377,11 +1392,19 @@ pub const Parser = struct {
                 },
                 else => {},
             }
+            var did_assign = false;
             var node_to_append: NodeIndex = undefined;
             switch (p.token.kind) {
                 .semicolon => {
                     self.nextToken();
-                    if (these_nodes.items.len == 0) {
+                    if (these_nodes.items.len == 0 and iteration == 0) {
+                        // self.unit.addDiagnostic(.{
+                        //     .level = .warning,
+                        //     .location = .{ .single = p.index },
+                        //     .kind = .{
+                        //         .useless_type_empty_decl = .{},
+                        //     },
+                        // });
                         return type_node;
                     }
                     break;
@@ -1404,7 +1427,9 @@ pub const Parser = struct {
 
                     if (this_type.is_function and !this_type.is_function_ptr) {
                         var decl_node_data: NodeData = undefined;
-                        decl_node_data.as(.two).a = @bitCast(this_ident orelse @panic("TODO: expected identifier in variable decl"));
+                        if (this_ident) |ident| {
+                            decl_node_data.as(.two).a = @bitCast(ident);
+                        }
 
                         ptok = self.peekToken();
                         var actual_function = false;
@@ -1427,6 +1452,16 @@ pub const Parser = struct {
                                 .data = decl_node_data,
                             });
                             node_to_append = function_decl;
+                        }
+                        if (this_ident == null) {
+                            self.unit.addDiagnostic(.{
+                                .level = .warning,
+                                .location = .{ .single = ptok.?.index },
+                                .kind = .{
+                                    .useless_type_empty_decl = .{},
+                                },
+                            });
+                            continue;
                         }
 
                         if (this_asm_label) |*tal| {
@@ -1460,24 +1495,107 @@ pub const Parser = struct {
                             try these_nodes.append(node_to_append);
                         }
                     } else {
-                        if (this_ident == null) {
-                            try these_nodes.append(this_type.node.?);
-                            continue;
-                        }
-
                         var kind = NodeKind.var_declaration;
                         var decl_node_data: NodeData = undefined;
-                        decl_node_data.as(.two).a = @bitCast(this_ident orelse @panic("TODO: expected identifier in variable decl"));
-
                         ptok = self.peekToken();
+
+                        if (this_ident) |ident| {
+                            decl_node_data.as(.two).a = @bitCast(ident);
+                        } else if (ptok == null or ptok.?.token.kind != .assignment) {
+                            // self.unit.addDiagnostic(.{
+                            //     .level = .warning,
+                            //     .location = .{ .single = ptok.?.index },
+                            //     .kind = .{
+                            //         .useless_type_empty_decl = .{},
+                            //     },
+                            // });
+                        } else if (ptok != null and ptok.?.token.kind == .assignment) {
+                            self.unit.addDiagnostic(.{
+                                .level = .err,
+                                .location = .{ .single = ptok.?.index },
+                                .kind = .{
+                                    .expected_var_ident = .{ .before = ptok.?.index },
+                                },
+                            });
+                        }
+
                         if (ptok != null and ptok.?.token.kind == .assignment) {
+                            did_assign = true;
                             self.nextToken();
 
-                            const decl_init = try self.parseInitializer();
+                            const decl_init = self.parseInitializer() catch {
+                                if (self.consumeExprStatementGarbage()) |found_tok| {
+                                    switch (found_tok.token.kind) {
+                                        .comma, .close_brace => {
+                                            self.nextToken();
+                                            ptok = self.peekToken();
+                                            if (ptok != null) {
+                                                switch (ptok.?.token.kind) {
+                                                    .comma => {
+                                                        self.nextToken();
+                                                        continue;
+                                                    },
+                                                    .semicolon => {
+                                                        self.nextToken();
+                                                        break;
+                                                    },
+                                                    else => {
+                                                        break;
+                                                    },
+                                                }
+                                            }
+                                            continue;
+                                        },
+                                        .semicolon => {
+                                            self.nextToken();
+                                            break;
+                                        },
+                                        else => {
+                                            break;
+                                        },
+                                    }
+                                }
+                                return error.DiscardedNode;
+                            };
                             decl_node_data.as(.four).d = @truncate(self.relativeOffset(decl_init));
                             kind = .var_declaration_init;
                         } else if ((storage_class & StorageClass.typedef) > 0) {
                             try self.unit.type_names.put(self.unit.identifierAt(@bitCast(this_ident.?)), {});
+                        }
+
+                        if (this_ident == null) {
+                            if (self.consumeExprStatementGarbage()) |found_tok| {
+                                switch (found_tok.token.kind) {
+                                    .comma, .close_brace => {
+                                        self.nextToken();
+                                        ptok = self.peekToken();
+                                        if (ptok != null) {
+                                            switch (ptok.?.token.kind) {
+                                                .comma => {
+                                                    self.nextToken();
+                                                    continue;
+                                                },
+                                                .semicolon => {
+                                                    self.nextToken();
+                                                    break;
+                                                },
+                                                else => {
+                                                    break;
+                                                },
+                                            }
+                                        }
+                                        continue;
+                                    },
+                                    .semicolon => {
+                                        self.nextToken();
+                                        break;
+                                    },
+                                    else => {
+                                        break;
+                                    },
+                                }
+                            }
+                            return error.DiscardedNode;
                         }
 
                         decl_node_data.as(.four).c = @truncate(self.relativeOffset(this_type.node.?));
@@ -1529,10 +1647,46 @@ pub const Parser = struct {
                     break;
                 },
                 else => {
-                    var writer = std.io.getStdOut().writer();
-                    Node.writeTree(type_node, self.unit, 0, true, false, &writer) catch @panic("");
-                    std.log.err("{s}, pos: {}", .{ self.tokenizer.unit.filePos(ptok.?.index)[0], self.tokenizer.unit.filePos(ptok.?.index)[1] });
-                    std.debug.panic("TODO: unexpected token {}", .{ptok.?.token.kind});
+                    self.unit.addDiagnostic(.{
+                        .level = .err,
+                        .location = .{ .single = ptok.?.index },
+                        .kind = if (did_assign) .{
+                            .expected_expression = .{ .before = ptok.?.index },
+                        } else .{
+                            .expected_var_decl = .{ .before = ptok.?.index },
+                        },
+                    });
+                    if (self.consumeExprStatementGarbage()) |found_tok| {
+                        switch (found_tok.token.kind) {
+                            .comma, .close_brace => {
+                                self.nextToken();
+                                ptok = self.peekToken();
+                                if (ptok != null) {
+                                    switch (ptok.?.token.kind) {
+                                        .comma => {
+                                            self.nextToken();
+                                            continue;
+                                        },
+                                        .semicolon => {
+                                            self.nextToken();
+                                            break;
+                                        },
+                                        else => {
+                                            break;
+                                        },
+                                    }
+                                }
+                                continue;
+                            },
+                            .semicolon => {
+                                self.nextToken();
+                                break;
+                            },
+                            else => {
+                                break;
+                            },
+                        }
+                    }
                 },
             }
         }
@@ -1701,7 +1855,18 @@ pub const Parser = struct {
                 .@"struct" => return try self.parseStructOrUnion(true),
                 .@"union" => return try self.parseStructOrUnion(false),
                 .@"enum" => return try self.parseEnum(),
-
+                ._complex => {
+                    if (type_kind) |tk| {
+                        type_kind = switch (tk) {
+                            .float_type => .float_complex_type,
+                            .double_type => .double_complex_type,
+                            .long_double_type => .long_double_complex_type,
+                            else => @panic("TODO: long incompatible with type"),
+                        };
+                    } else {
+                        type_kind = .short_type;
+                    }
+                },
                 .type_name => {
                     type_kind = .type_name;
                     type_name_token = ptok.?.index;
@@ -2524,9 +2689,13 @@ pub const Parser = struct {
             .open_brace => try self.parseCompoundStatement(),
             .@"while" => {
                 self.nextToken();
-                _ = try self.expect(.open_paren);
+                _ = self.expect(.open_paren) catch {
+                    _ = self.consumeStatementGarbage();
+                };
                 const condition = try self.parseExpression();
-                _ = try self.expect(.close_paren);
+                _ = self.expect(.close_paren) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
                 const ntok = self.peekToken();
                 if (ntok != null and ntok.?.token.kind == .semicolon) {
@@ -2551,10 +2720,16 @@ pub const Parser = struct {
                 self.nextToken();
                 const body = try self.parseStatement();
 
-                _ = try self.expect(.@"while");
-                _ = try self.expect(.open_paren);
+                _ = self.expect(.@"while") catch {
+                    _ = self.consumeStatementGarbage();
+                };
+                _ = self.expect(.open_paren) catch {
+                    _ = self.consumeStatementGarbage();
+                };
                 const condition = try self.parseExpression();
-                _ = try self.expect(.close_paren);
+                _ = self.expect(.close_paren) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
                 const result = try self.createNode(Node{
                     .kind = .do_while_loop,
@@ -2563,32 +2738,49 @@ pub const Parser = struct {
                     },
                 });
 
-                _ = try self.expect(.semicolon);
+                _ = self.expect(.semicolon) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
                 return result;
             },
             .@"for" => {
                 self.nextToken();
 
-                _ = try self.expect(.open_paren);
+                _ = self.expect(.open_paren) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
-                const init_expr = try self.parseDeclOrExprStmt();
+                const init_expr = self.parseDeclOrExprStmt() catch blk: {
+                    _ = self.consumeStatementGarbage();
+                    break :blk try self.createNode(.{ .kind = .poison, .data = undefined });
+                };
 
                 var ntok = self.peekToken();
                 const condition = if (ntok != null and ntok.?.token.kind == .semicolon)
                     try self.createNode(Node{ .kind = .empty_statement, .data = undefined })
                 else
-                    try self.parseExpression();
+                    self.parseExpression() catch blk: {
+                        _ = self.consumeStatementGarbage();
+                        break :blk try self.createNode(.{ .kind = .poison, .data = undefined });
+                    };
 
-                _ = try self.expect(.semicolon);
+                _ = self.expect(.semicolon) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
                 ntok = self.peekToken();
                 const increment = if (ntok != null and ntok.?.token.kind != .close_paren)
-                    try self.parseExpression()
+                    self.parseExpression() catch blk: {
+                        _ = self.consumeStatementGarbage();
+                        break :blk null;
+                    }
                 else
                     null;
 
-                _ = try self.expect(.close_paren);
+                _ = self.expect(.close_paren) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
                 var node_data: NodeData = undefined;
 
@@ -2621,9 +2813,16 @@ pub const Parser = struct {
             },
             .@"if" => {
                 self.nextToken();
-                _ = try self.expect(.open_paren);
-                const condition = try self.parseExpression();
-                _ = try self.expect(.close_paren);
+                _ = self.expect(.open_paren) catch {
+                    _ = self.consumeStatementGarbage();
+                };
+                const condition = self.parseExpression() catch blk: {
+                    _ = self.consumeStatementGarbage();
+                    break :blk try self.createNode(.{ .kind = .poison, .data = undefined });
+                };
+                _ = self.expect(.close_paren) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
                 const body = try self.parseStatement();
                 var node_data: NodeData = undefined;
@@ -2650,9 +2849,16 @@ pub const Parser = struct {
             },
             .@"switch" => {
                 self.nextToken();
-                _ = try self.expect(.open_paren);
-                const value = try self.parseExpression();
-                _ = try self.expect(.close_paren);
+                _ = self.expect(.open_paren) catch {
+                    _ = self.consumeStatementGarbage();
+                };
+                const value = self.parseExpression() catch blk: {
+                    _ = self.consumeStatementGarbage();
+                    break :blk try self.createNode(.{ .kind = .poison, .data = undefined });
+                };
+                _ = self.expect(.close_paren) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
                 const body = try self.parseStatement();
 
@@ -2665,8 +2871,13 @@ pub const Parser = struct {
             },
             .case => {
                 self.nextToken();
-                const value = try self.parseOperatorExpression(30);
-                _ = try self.expect(.colon);
+                const value = self.parseOperatorExpression(30) catch blk: {
+                    _ = self.consumeStatementGarbage();
+                    break :blk try self.createNode(.{ .kind = .poison, .data = undefined });
+                };
+                _ = self.expect(.colon) catch {
+                    // TODO: is this ok to just leave?
+                };
 
                 const body = try self.parseStatement();
 
@@ -2679,7 +2890,9 @@ pub const Parser = struct {
             },
             .default => {
                 self.nextToken();
-                _ = try self.expect(.colon);
+                _ = self.expect(.colon) catch {
+                    // TODO: is this ok to just leave?
+                };
 
                 const body = try self.parseStatement();
 
@@ -2692,8 +2905,16 @@ pub const Parser = struct {
             },
             .goto => {
                 self.nextToken();
-                const ident = try self.expect(.identifier);
-                _ = try self.expect(.semicolon);
+                var brk = false;
+                const ident = self.expect(.identifier) catch blk: {
+                    _ = self.consumeStatementGarbage();
+                    brk = true;
+                    break :blk undefined;
+                };
+                _ = self.expect(.semicolon) catch {
+                    _ = self.consumeStatementGarbage();
+                };
+                if (brk) return error.DiscardedNode;
 
                 return try self.createNode(Node{
                     .kind = .continue_statement,
@@ -2704,7 +2925,9 @@ pub const Parser = struct {
             },
             .@"continue" => {
                 self.nextToken();
-                _ = try self.expect(.semicolon);
+                _ = self.expect(.semicolon) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
                 return try self.createNode(Node{
                     .kind = .continue_statement,
@@ -2713,7 +2936,9 @@ pub const Parser = struct {
             },
             .@"break" => {
                 self.nextToken();
-                _ = try self.expect(.semicolon);
+                _ = self.expect(.semicolon) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
                 return try self.createNode(Node{
                     .kind = .break_statement,
@@ -2730,8 +2955,13 @@ pub const Parser = struct {
                         .data = undefined,
                     });
                 }
-                const expr = try self.parseExpression();
-                _ = try self.expect(.semicolon);
+                const expr = self.parseExpression() catch blk: {
+                    _ = self.consumeStatementGarbage();
+                    break :blk try self.createNode(.{ .kind = .poison, .data = undefined });
+                };
+                _ = self.expect(.semicolon) catch {
+                    _ = self.consumeStatementGarbage();
+                };
 
                 return try self.createNode(Node{
                     .kind = .return_statement_value,
@@ -2773,12 +3003,27 @@ pub const Parser = struct {
                     return try self.parseOperatorExpressionWithLeft(0, left);
                 }
             },
+            .@"else" => {
+                self.nextToken();
+                self.unit.addDiagnostic(.{ .level = .err, .location = .{ .single = ptok.index }, .kind = .{ .else_without_if = .{} } });
+                const ntok = self.peekToken();
+                if (ntok != null and ntok.?.token.kind == .semicolon) {
+                    self.nextToken();
+                }
+                return error.DiscardedNode;
+            },
             else => {
-                const result = try self.parseExpression();
+                const result = self.parseExpression() catch {
+                    _ = self.consumeStatementGarbage();
+                    return error.DiscardedNode;
+                };
                 const node = self.unit.nodes.items[result];
                 if (node.kind == .label) return result;
 
-                _ = try self.expect(.semicolon);
+                _ = self.expect(.semicolon) catch {
+                    _ = self.consumeExprStatementGarbage();
+                    return result;
+                };
                 return result;
             },
         };
@@ -2858,7 +3103,9 @@ pub const Parser = struct {
             },
             else => {
                 const result = try self.parseExpression();
-                _ = try self.expect(.semicolon);
+                _ = self.expect(.semicolon) catch {
+                    _ = self.consumeExprStatementGarbage();
+                };
                 return result;
             },
         }
@@ -2874,35 +3121,80 @@ pub const Parser = struct {
             });
         }
 
+        const diag_loc = self.tokenizer.diagnosticLocation();
         const first_node = if (ptok != null) blk: {
-            const result = try self.parseBlockItem(&ptok.?.token);
-            ptok = self.peekToken();
-            if (ptok != null and ptok.?.token.kind == .close_brace) {
-                self.nextToken();
-                return try self.createNode(Node{
-                    .kind = .compound_one,
-                    .data = .{
-                        .two = .{ .a = result, .b = undefined },
-                    },
-                });
+            // loop until we get first valid item
+            var result: ?NodeIndex = null;
+            while (result == null) {
+                result = self.parseBlockItem(&ptok.?.token) catch {
+                    ptok = self.peekToken();
+                    if (ptok != null and ptok.?.token.kind == .close_brace) {
+                        self.nextToken();
+                        return try self.createNode(Node{
+                            .kind = .compound_empty,
+                            .data = undefined,
+                        });
+                    }
+                    continue;
+                };
+
+                ptok = self.peekToken();
+                if (ptok != null and ptok.?.token.kind == .close_brace) {
+                    self.nextToken();
+                    return try self.createNode(Node{
+                        .kind = .compound_one,
+                        .data = .{
+                            .two = .{ .a = result.?, .b = undefined },
+                        },
+                    });
+                }
             }
 
-            break :blk result;
-        } else @panic("unexpected end of input");
+            break :blk result.?;
+        } else {
+            self.unit.addDiagnostic(.{
+                .level = .err,
+                .location = self.tokenizer.diagnosticLocation(),
+                .kind = .{
+                    .expected_token_before_end = .{ .token_kind = .close_brace },
+                },
+            });
+            return error.DiscardedNode;
+        };
 
         var these_nodes = std.ArrayList(NodeIndex).init(self.allocator);
         defer these_nodes.deinit();
         try these_nodes.append(first_node);
 
+        var matched_brace = false;
         ptok = self.peekToken();
         while (ptok) |p| : (ptok = self.peekToken()) {
             switch (p.token.kind) {
                 .close_brace => {
                     self.nextToken();
+                    matched_brace = true;
                     break;
                 },
-                else => try these_nodes.append(try self.parseBlockItem(&p.token)),
+                else => {
+                    const block_item = self.parseBlockItem(&p.token) catch |e| {
+                        switch (e) {
+                            error.DiscardedNode => continue,
+                            else => return e,
+                        }
+                    };
+                    try these_nodes.append(block_item);
+                },
             }
+        }
+
+        if (!matched_brace) {
+            self.unit.addDiagnostic(.{
+                .level = .err,
+                .location = diag_loc,
+                .kind = .{
+                    .expected_token_before_end = .{ .token_kind = .close_brace },
+                },
+            });
         }
 
         const starti = self.unit.node_ranges.items.len;
@@ -3220,23 +3512,15 @@ pub const Parser = struct {
     }
 
     pub fn parsePrimaryExpression(self: *Self) !NodeIndex {
-        var ptok = self.peekToken() orelse @panic("EOF");
-
-        // float_literal,
-        // double_literal,
-        // int_literal,
-        // unsigned_int_literal,
-        // long_literal,
-        // unsigned_long_literal,
-        // long_long_literal,
-        // unsigned_long_long_literal,
-        // size_literal,
-        // unsigned_size_literal,
+        var ptok = self.peekToken() orelse return error.UnexpectedEnd;
 
         const node = switch (ptok.token.kind) {
             .open_paren => {
                 self.nextToken();
-                ptok = self.peekToken() orelse @panic("EOF");
+                ptok = self.peekToken() orelse {
+                    self.unit.addDiagnostic(.{ .level = .err, .location = .{ .single = ptok.index }, .kind = .{ .expected_expression_before_end = .{} } });
+                    return error.UnexpectedEnd;
+                };
 
                 switch (ptok.token.kind) {
                     .auto,
@@ -3470,7 +3754,18 @@ pub const Parser = struct {
             //         },
             //     });
             // },
-            else => std.debug.panic("Unexpected in primary {}", .{ptok.token.kind}),
+            else => {
+                self.unit.addDiagnostic(.{
+                    .level = .err,
+                    .location = .{ .single = ptok.index },
+                    .kind = .{
+                        .expected_expression = .{
+                            .before = ptok.index,
+                        },
+                    },
+                });
+                return error.UnexpectedToken;
+            },
         };
 
         return try self.createNodeAndNext(node);
@@ -3496,50 +3791,40 @@ pub const Parser = struct {
         };
     }
 
-    inline fn hasNext(self: *Self) bool {
-        return self.unit.virtual_token_next < self.unit.virtual_tokens.items.len or self.tokenizer.peek(false) != null;
-    }
-
-    fn rawPeekToken(self: *Self) ?tok.Token {
-        const index = self.tokenizer.peek(false);
-        if (index == null) return null;
-
-        return self.unit.token(index.?);
-    }
-
-    fn rawPeekTokenIndex(self: *Self) tok.TokenIndex {
-        const index = self.tokenizer.peek(false);
-        return index.?;
-    }
-
-    fn rawPeekTokenEOL(self: *Self) ?tok.Token {
-        const index = self.tokenizer.peek(true);
-        if (index == null) return null;
-
-        return self.unit.token(index.?);
-    }
-
-    fn rawPeekTokenEOLIndex(self: *Self) tok.TokenIndex {
-        const index = self.tokenizer.peek(true);
-        return index.?;
-    }
-
     fn expect(self: *Self, kind: tok.TokenKind) !TokenResult {
         const token = self.peekToken();
-        if (token == null) return error.OutOfTokens;
+        if (token == null) {
+            self.unit.addDiagnostic(.{
+                .level = .err,
+                .location = self.tokenizer.diagnosticLocation(),
+                .kind = .{
+                    .expected_expression_before_end = .{},
+                },
+            });
+            return error.UnexpectedEnd;
+        }
 
         if (token.?.token.kind == kind) {
             self.nextToken();
             return token.?;
         } else {
-            std.log.err("Found {}", .{token.?.token.kind});
+            self.unit.addDiagnostic(.{
+                .level = .err,
+                .location = self.tokenizer.diagnosticLocation(),
+                .kind = .{
+                    .expected_token = .{
+                        .token_kind = kind,
+                        .before = token.?.index,
+                    },
+                },
+            });
             return error.UnexpectedToken;
         }
     }
 
     fn expectIndex(self: *Self, kind: tok.TokenKind) !tok.TokenIndex {
         const token = self.peekToken();
-        if (token == null) return error.OutOfTokens;
+        if (token == null) return error.UnexpectedEnd;
 
         if (token.?.token.kind == kind) {
             self.nextToken();
@@ -3550,70 +3835,130 @@ pub const Parser = struct {
         }
     }
 
-    fn rawExpect(self: *Self, kind: tok.TokenKind) !tok.Token {
-        const index = self.tokenizer.peek(false);
-        if (index == null) return error.OutOfTokens;
-
-        const token = self.unit.tokens[0].items[index.?];
-        if (token.kind == kind) {
-            _ = self.tokenizer.next(false);
-            return token;
-        } else {
-            return error.UnexpectedToken;
+    pub fn consumeToFirstOf(self: *Self, tok_types: []const tok.TokenKind) ?TokenResult {
+        var ptok = self.peekToken();
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            if (std.mem.indexOfScalar(tok.TokenKind, tok_types, p.token.kind)) |_| {
+                return p;
+            }
+            self.nextToken();
         }
+        return null;
     }
 
-    fn rawExpectEOL(self: *Self, kind: tok.TokenKind) !tok.Token {
-        const index = self.tokenizer.peek(true);
-        if (index == null) return error.OutOfTokens;
-
-        const token = self.unit.token(index.?);
-        if (token.kind == kind) {
-            _ = self.tokenizer.next(true);
-            return token;
-        } else {
-            return error.UnexpectedToken;
+    pub fn consumeExprStatementGarbage(self: *Self) ?TokenResult {
+        var ptok = self.peekToken();
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.token.kind) {
+                .type_name,
+                .close_brace,
+                .close_bracket,
+                .comma,
+                .semicolon,
+                .at,
+                .auto,
+                .atomic,
+                .@"break",
+                .@"const",
+                .case,
+                .@"continue",
+                .default,
+                .do,
+                .@"else",
+                .@"enum",
+                .@"extern",
+                .@"for",
+                .goto,
+                .@"if",
+                .@"inline",
+                .noreturn,
+                .register,
+                .restrict,
+                .@"return",
+                .static,
+                .static_assert,
+                .@"struct",
+                .@"switch",
+                .thread_local,
+                .typedef,
+                .@"union",
+                .void,
+                .@"volatile",
+                .@"while",
+                .unsigned,
+                .signed,
+                .char,
+                .short,
+                .int,
+                .long,
+                .float,
+                .double,
+                .bool,
+                => return p,
+                else => {},
+            }
+            self.nextToken();
         }
+        return null;
     }
 
-    fn rawExpectEOLIndex(self: *Self, kind: tok.TokenKind) !tok.TokenIndex {
-        const index = self.tokenizer.peek(true);
-        if (index == null) return error.OutOfTokens;
-
-        const token = self.unit.token(index.?);
-        if (token.kind == kind) {
-            _ = self.tokenizer.next(true);
-            return index.?;
-        } else {
-            return error.UnexpectedToken;
+    pub fn consumeStatementGarbage(self: *Self) ?TokenResult {
+        var ptok = self.peekToken();
+        while (ptok) |p| : (ptok = self.peekToken()) {
+            switch (p.token.kind) {
+                .type_name,
+                .open_brace,
+                .close_brace,
+                .close_bracket,
+                .open_paren,
+                .close_paren,
+                .comma,
+                .semicolon,
+                .at,
+                .auto,
+                .atomic,
+                .@"break",
+                .@"const",
+                .case,
+                .@"continue",
+                .default,
+                .do,
+                .@"enum",
+                .@"extern",
+                .@"for",
+                .goto,
+                .@"if",
+                .@"inline",
+                .noreturn,
+                .register,
+                .restrict,
+                .@"return",
+                .static,
+                .static_assert,
+                .@"struct",
+                .@"switch",
+                .thread_local,
+                .typedef,
+                .@"union",
+                .void,
+                .@"volatile",
+                .@"while",
+                .unsigned,
+                .signed,
+                .char,
+                .short,
+                .int,
+                .long,
+                .float,
+                .double,
+                .bool,
+                => return p,
+                else => {},
+            }
+            self.nextToken();
         }
+        return null;
     }
-
-    //             } else if (std.mem.eql(u8, directive, "include")) {
-    //                 const ptok = self.rawPeekTokenEOL();
-    //                 if (ptok != null and ptok.?.token.kind == .string_literal) {
-    //                     tidx = self.peekTokenIndex();
-    //                     _ = self.tokenizer.nextEOL();
-    //                     const file_path = self.unit.stringAt(tidx);
-    //                     const this_file_dir_path = std.fs.path.dirname(self.unit.files.items[0].file_path).?;
-    //                     const full_file_path = try std.fs.path.resolve(self.allocator, &.{
-    //                         this_file_dir_path, file_path,
-    //                     });
-
-    //                     std.log.info("file is {s} {s}", .{ full_file_path, file_path });
-    //                     var file = std.fs.openFileAbsolute(full_file_path, .{}) catch @panic("dang");
-    //                     const file_contents = file.readToEndAlloc(self.allocator, std.math.maxInt(usize)) catch |e| std.debug.panic("foo {}", .{e});
-    //                     defer self.allocator.free(file_contents);
-
-    //                     var file_tokenizer = Tokenizer.initVirtual(self.allocator, self.unit, @truncate(self.unit.files.items.len));
-    //                     while (file_tokenizer.next()) |pt| {
-    //                         std.log.debug("Token: {}", .{pt});
-    //                     }
-    //                 } else {
-    //                     @panic("todo");
-    //                 }
-    //             }
-    //         },
 
     inline fn relativeOffset(self: *Self, offset: u32) u16 {
         return @as(u16, @truncate(self.unit.nodes.items.len - offset));

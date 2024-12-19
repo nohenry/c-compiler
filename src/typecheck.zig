@@ -708,10 +708,10 @@ pub const TypeChecker = struct {
 
                 const condition_type = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.b), null);
                 if (!condition_type.isScalar()) {
-                    std.debug.panic("Expected integral type in for condition!", .{});
+                    // std.debug.panic("Expected integral type in for condition!", .{});
                 }
-                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.c), null);
-                _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.d), null);
+                // _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.c), null);
+                // _ = try self.checkNode(Node.absoluteIndex(nidx, node.data.four.d), null);
 
                 return self.unit.interner.voidTy();
             },
@@ -901,7 +901,47 @@ pub const TypeChecker = struct {
 
                 return self.unit.interner.voidTy();
             },
-            .char_type, .signed_char_type, .unsigned_char_type, .short_type, .signed_short_type, .unsigned_short_type, .int_type, .signed_int_type, .unsigned_int_type, .long_type, .signed_long_type, .unsigned_long_type, .long_long_type, .signed_long_long_type, .unsigned_long_long_type, .float_type, .double_type, .long_double_type, .bool_type, .unsigned, .signed, .void_type, .pointer, .array_type, .array_type_fixed, .function_type, .function_type_one_parameter, .function_type_parameter, .parameter, .parameter_ident, .@"struct", .@"union", .struct_ident, .union_ident, .@"enum", .enum_ident, .struct_forward, .union_forward, .enum_forward, .type_name => blk: {
+            .char_type,
+            .signed_char_type,
+            .unsigned_char_type,
+            .short_type,
+            .signed_short_type,
+            .unsigned_short_type,
+            .int_type,
+            .signed_int_type,
+            .unsigned_int_type,
+            .long_type,
+            .signed_long_type,
+            .unsigned_long_type,
+            .long_long_type,
+            .signed_long_long_type,
+            .unsigned_long_long_type,
+            .float_type,
+            .double_type,
+            .long_double_type,
+            .bool_type,
+            .unsigned,
+            .signed,
+            .void_type,
+            .pointer,
+            .array_type,
+            .array_type_fixed,
+            .function_type,
+            .function_type_one_parameter,
+            .function_type_parameter,
+            .parameter,
+            .parameter_ident,
+            .@"struct",
+            .@"union",
+            .struct_ident,
+            .union_ident,
+            .@"enum",
+            .enum_ident,
+            .struct_forward,
+            .union_forward,
+            .enum_forward,
+            .type_name,
+            => blk: {
                 const ty = try self.checkNodeType(nidx);
                 break :blk self.unit.interner.typeTy(ty, 0);
             },
@@ -946,6 +986,9 @@ pub const TypeChecker = struct {
             .bool_type => self.unit.interner.boolTy(node.data.eight.h),
             .unsigned => self.unit.interner.intTy(false, node.data.eight.h),
             .signed => self.unit.interner.intTy(true, node.data.eight.h),
+            .float_complex_type => self.unit.interner.floatComplexTy(node.data.eight.h),
+            .double_complex_type => self.unit.interner.doubleComplexTy(node.data.eight.h),
+            .long_double_complex_type => self.unit.interner.longdoubleComplexTy(node.data.eight.h),
 
             .void_type => self.unit.interner.voidTy(),
 

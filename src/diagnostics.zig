@@ -29,6 +29,25 @@ pub const DiagnosticKind = union(enum) {
         tok: u32,
         bar: u32,
     },
+    expected_token: struct {
+        token_kind: tok.TokenKind,
+        before: TokenIndex,
+    },
+    expected_token_before_end: struct {
+        token_kind: tok.TokenKind,
+    },
+    expected_expression: struct {
+        before: TokenIndex,
+    },
+    expected_expression_before_end: struct {},
+    expected_var_ident: struct {
+        before: TokenIndex,
+    },
+    expected_var_decl: struct {
+        before: TokenIndex,
+    },
+    else_without_if: struct {},
+    useless_type_empty_decl: struct {},
     hex_float_requires_exponent: struct {},
     invalid_literal_for_int_base: struct {
         suffix: DiagnosticLocation,
@@ -83,6 +102,14 @@ pub const DiagnosticKind = union(enum) {
     pub fn errorMessageGnu(self: Self) []const u8 {
         return switch (self) {
             .foo => "this is a foo {[bar]} {[tok]}",
+            .expected_token => "expected '{[format_token]}{[token_kind]}{[format_end]}' before '{[format_token]}{[before]}{[format_end]}' token",
+            .expected_token_before_end => "expected '{[format_token]}{[token_kind]}{[format_end]}' before end of input",
+            .expected_expression => "expected expression before '{[format_token]}{[before]}{[format_end]}' token",
+            .expected_expression_before_end => "expected expression at end of input",
+            .expected_var_ident => "expected identifier or '{[format_token]}({[format_end]}' before '{[format_token]}{[before]}{[format_end]}' token",
+            .expected_var_decl => "expected '{[format_token]}={[format_end]}', '{[format_token]},{[format_end]}', '{[format_token]};{[format_end]}', '{[format_token]}asm{[format_end]}' or '{[format_token]}__attribute__{[format_end]}' before '{[format_token]}{[before]}{[format_end]}'",
+            .else_without_if => "'{[format_token]}else{[format_end]}' without a previous '{[format_token]}if{[format_end]}'",
+            .useless_type_empty_decl => "useless type name in empty declaration",
             .hex_float_requires_exponent => "hexadecimal floating constants require an exponent",
             // .invalid_literal_for_int_base => "invalid digit \"{[format_token]}{[char]c}{[format_end]}\" on integer constant for base {[format_const]}{[base]}{[format_end]}",
             .invalid_literal_for_int_base => "invalid suffix \"{[format_token]}{[suffix]}{[format_end]}\" on integer constant",
@@ -561,11 +588,14 @@ pub fn formatType(
             }
             try writer.writeAll(" }");
         },
-        .@"struct", .@"union" => {
+        .@"struct", .@"union", .@"enum" => {
             switch (T) {
                 tok.TokenIndex => {
                     const slice = unit.tokenSourceSlice(value);
                     try writer.writeAll(slice);
+                },
+                tok.TokenKind => {
+                    try writer.writeAll(value.toStr());
                 },
                 DiagnosticLocation => {
                     switch (value) {

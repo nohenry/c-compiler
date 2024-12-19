@@ -24,6 +24,9 @@ pub const TypeKind = struct {
         float: void,
         double: void,
         longdouble: void,
+        float_complex: void,
+        double_complex: void,
+        longdouble_complex: void,
         bool: void,
 
         pointer: struct { base: Type },
@@ -341,6 +344,19 @@ pub const TypeInterner = struct {
     pub fn longdoubleTy(self: *Self, qualifiers: TypeQualifier.Type) Type {
         return self.createOrGetTy(.longdouble, qualifiers);
     }
+
+    pub fn floatComplexTy(self: *Self, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.float_complex, qualifiers);
+    }
+
+    pub fn doubleComplexTy(self: *Self, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.double_complex, qualifiers);
+    }
+
+    pub fn longdoubleComplexTy(self: *Self, qualifiers: TypeQualifier.Type) Type {
+        return self.createOrGetTy(.longdouble_complex, qualifiers);
+    }
+
 
     pub fn boolTy(self: *Self, qualifiers: TypeQualifier.Type) Type {
         return self.createOrGetTy(.bool, qualifiers);
@@ -662,6 +678,9 @@ pub const TypeInterner = struct {
             .float => try writer.print("float", .{}),
             .double => try writer.print("double", .{}),
             .longdouble => try writer.print("long double", .{}),
+            .float_complex => try writer.print("float complex", .{}),
+            .double_complex => try writer.print("double complex", .{}),
+            .longdouble_complex => try writer.print("long double complex", .{}),
             .bool => try writer.print("bool", .{}),
 
             .pointer => |ptr| {

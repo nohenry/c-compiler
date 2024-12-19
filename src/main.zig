@@ -639,8 +639,8 @@ pub fn main() !void {
     var parser = Parser.init(&unit, &tokenizer);
     const unit_range = try parser.parseUnit();
 
-    // const stdout = std.io.getStdOut();
-    // var writer = stdout.writer();
+    const stdout = std.io.getStdOut();
+    var writer = stdout.writer();
     for (0..unit_range.count) |i| {
         const node_index = unit.node_ranges.items[i + unit_range.start];
         _ = node_index;
@@ -651,7 +651,9 @@ pub fn main() !void {
     for (0..unit_range.count) |i| {
         const node_index = unit.node_ranges.items[i + unit_range.start];
         _ = try typechecker.checkNode(node_index, null);
-        // try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, true, writer);
+        if (debug_trace) {
+            try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, true, &writer);
+        }
     }
 
     const format_config = diag.FormatConfig{

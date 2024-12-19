@@ -501,6 +501,8 @@ pub const CodeGenerator = struct {
             },
             .var_declaration => {
                 const ident_index = node.data.two.a;
+                // const ident_str = self.unit.identifierAt(@bitCast(ident_index));
+                // std.log.info("vardecl {s}", .{ident_str});
                 const decl_ty = self.unit.declared_type.get(nidx).?;
                 const layout = self.computeLayout(decl_ty);
 
@@ -1714,6 +1716,21 @@ pub const CodeGenerator = struct {
             .float => .{ .size = 4, .alignment = 4 },
             .double => .{ .size = 8, .alignment = 8 },
             .longdouble => .{ .size = 16, .alignment = 16 },
+            .float_complex => blk: {
+                var float_layout = self.computeLayout(self.unit.interner.floatTy(0));
+                float_layout.size *= 2;
+                break :blk float_layout;
+            },
+            .double_complex => blk: {
+                var double_layout = self.computeLayout(self.unit.interner.doubleTy(0));
+                double_layout.size *= 2;
+                break :blk double_layout;
+            },
+            .longdouble_complex => blk: {
+                var longdouble_layout = self.computeLayout(self.unit.interner.longdoubleTy(0));
+                longdouble_layout.size *= 2;
+                break :blk longdouble_layout;
+            },
             .pointer => .{ .size = 8, .alignment = 8 },
             .array => |arr| blk: {
                 const base_layout = self.computeLayout(arr.base);
