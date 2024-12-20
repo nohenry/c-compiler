@@ -1,3 +1,4 @@
+#include "sys/cdefs.h"
 #include "../testsuite/gcc.dg/compat/compat-common.h"
 
 #include "../testsuite/gcc.dg/compat/fp2-struct-defs.h"

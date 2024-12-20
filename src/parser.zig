@@ -1560,7 +1560,7 @@ pub const Parser = struct {
                             decl_node_data.as(.four).d = @truncate(self.relativeOffset(decl_init));
                             kind = .var_declaration_init;
                         } else if ((storage_class & StorageClass.typedef) > 0) {
-                            try self.unit.type_names.put(self.unit.identifierAt(@bitCast(this_ident.?)), {});
+                            try self.unit.type_names.put(@bitCast(this_ident.?), {});
                         }
 
                         if (this_ident == null) {
@@ -1881,7 +1881,7 @@ pub const Parser = struct {
         if (type_kind == null) {
             var it = self.unit.type_names.iterator();
             while (it.next()) |value| {
-                std.log.debug("TypeName: \x1b[1;36m'{s}'\x1b[0m", .{value.key_ptr.*});
+                std.log.debug("TypeName: \x1b[1;36m'{s}'\x1b[0m", .{self.unit.identifierAt(value.key_ptr.*)});
             }
             std.log.info("File: {s}", .{self.unit.files.items[ptok.?.index.file_index].file_path});
             std.log.info("Position: {}", .{self.unit.token(ptok.?.index)});
@@ -3127,6 +3127,9 @@ pub const Parser = struct {
             var result: ?NodeIndex = null;
             while (result == null) {
                 result = self.parseBlockItem(&ptok.?.token) catch {
+                    self.unit.printDiagnostics();
+                    if (true)
+                        @panic("");
                     ptok = self.peekToken();
                     if (ptok != null and ptok.?.token.kind == .close_brace) {
                         self.nextToken();

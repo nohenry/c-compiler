@@ -11,6 +11,41 @@ const NodeIndex = @import("parser.zig").NodeIndex;
 const ty = @import("types.zig");
 const diag = @import("diagnostics.zig");
 
+pub const IdentifierMapAdapter = struct {
+    unit: *Unit,
+    pub fn hash(ctx: @This(), key: []const u8) u64 {
+        _ = ctx;
+        return (std.hash_map.StringContext{}).hash(key);
+    }
+
+    pub fn eql(ctx: @This(), a: []const u8, b: TokenIndex) bool {
+        const ident_str = ctx.unit.identifierAt(b);
+        return std.mem.eql(u8, a, ident_str);
+    }
+};
+
+pub const IdentifierMapContext = struct {
+    unit: *Unit,
+    pub fn hash(ctx: @This(), key: TokenIndex) u64 {
+        return (std.hash_map.StringContext{}).hash(ctx.unit.identifierAt(key));
+    }
+
+    pub fn eql(ctx: @This(), a: TokenIndex, b: TokenIndex) bool {
+        const ident_str_a = ctx.unit.identifierAt(a);
+        const ident_str_b = ctx.unit.identifierAt(b);
+        return std.mem.eql(u8, ident_str_a, ident_str_b);
+    }
+};
+
+pub fn IdentifierMap(MapValue: type) type {
+    return std.HashMap(
+        TokenIndex,
+        MapValue,
+        IdentifierMapContext,
+        std.hash_map.default_max_load_percentage,
+    );
+}
+
 pub const DefineValue = struct {
     name_tok: TokenIndex,
     range: TokenRange,
@@ -22,7 +57,7 @@ pub const DefineFunction = struct {
     name_tok: TokenIndex,
     range: TokenRange,
 
-    parameters: std.StringArrayHashMap(void),
+    parameters: std.AutoArrayHashMap(TokenIndex, void),
     var_arg: bool,
 };
 
@@ -38,7 +73,7 @@ pub const Config = struct {
 
 pub const Unit = struct {
     allocator: std.mem.Allocator,
-    type_names: std.StringHashMap(void),
+    type_names: IdentifierMap(void),
     files: std.ArrayList(File),
     config: Config,
 
@@ -52,10 +87,10 @@ pub const Unit = struct {
     node_to_node: std.AutoHashMap(NodeIndex, NodeIndex),
     field_map: std.AutoHashMap(NodeIndex, std.StringHashMap(u32)),
     symbol_table: SymbolTable,
-    enum_constants: std.StringHashMap(u64),
+    enum_constants: IdentifierMap(u64),
 
-    defines: std.StringHashMap(DefineValue),
-    define_fns: std.StringHashMap(DefineFunction),
+    defines: IdentifierMap(DefineValue),
+    define_fns: IdentifierMap(DefineFunction),
 
     include_dirs: std.ArrayList([]const u8),
 
@@ -63,7 +98,8 @@ pub const Unit = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, config: Config) Self {
+    pub fn init(allocator: std.mem.Allocator, config: Config) *Self {
+        const self = allocator.create(Self) catch @panic("OOM");
         const files = std.ArrayList(File).init(allocator);
         // files.append(.{
         //     .file_path = file_path,
@@ -74,14 +110,11 @@ pub const Unit = struct {
         var include_dirs = std.ArrayList([]const u8).init(allocator);
         include_dirs.append("/opt/homebrew/Cellar/llvm/19.1.4/lib/clang/19/include") catch @panic("OOM");
         include_dirs.append("/Library/Developer/CommandLineTools/SDKs/MacOSX14.sdk/usr/include") catch @panic("OOM");
-        var type_names = std.StringHashMap(void).init(allocator);
-        type_names.put("__int128_t", {}) catch @panic("OOM");
-        type_names.put("__uint128_t", {}) catch @panic("OOM");
 
-        return .{
+        self.* = .{
             .allocator = allocator,
             .files = files,
-            .type_names = type_names,
+            .type_names = .initContext(allocator, .{ .unit = self }),
             .token_end_range = std.AutoHashMap(TokenIndex, u32).init(allocator),
             .config = config,
 
@@ -93,16 +126,27 @@ pub const Unit = struct {
             .node_to_type = std.AutoHashMap(NodeIndex, ty.Type).init(allocator),
             .field_map = .init(allocator),
             .symbol_table = SymbolTable.init(allocator),
-            .enum_constants = .init(allocator),
-            .defines = std.StringHashMap(DefineValue).init(allocator),
-            .define_fns = std.StringHashMap(DefineFunction).init(allocator),
+            .enum_constants = .initContext(allocator, .{ .unit = self }),
+            .defines = .initContext(allocator, .{ .unit = self }),
+            .define_fns = .initContext(allocator, .{ .unit = self }),
             .include_dirs = include_dirs,
             .diagnostics = .init(allocator),
         };
+
+        return self;
     }
 
     pub fn addDiagnostic(self: *Unit, diagnostic: diag.Diagnostic) void {
         self.diagnostics.append(diagnostic) catch @panic("OOM");
+    }
+
+    pub fn printDiagnostics(self: *Unit) void {
+        const format_config = diag.FormatConfig{
+            .colors = true,
+        };
+        for (self.diagnostics.items) |d| {
+            d.write(std.io.getStdOut().writer(), self, format_config) catch {};
+        }
     }
 
     pub inline fn filePos(self: *const Unit, tidx: TokenIndex) struct { []const u8, u32 } {

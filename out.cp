@@ -1,1 +1,1114 @@
-typedef char __int8_t ; typedef unsigned char __uint8_t ; typedef short __int16_t ; typedef unsigned short __uint16_t ; typedef int __int32_t ; typedef unsigned int __uint32_t ; typedef long long __int64_t ; typedef unsigned long long __uint64_t ; typedef long __darwin_intptr_t ; typedef unsigned int __darwin_natural_t ; typedef int __darwin_ct_rune_t ; typedef union { char __mbstate8 [ 128 ] ; long long _mbstateL ; } __mbstate_t ; typedef __mbstate_t __darwin_mbstate_t ; typedef long int __darwin_ptrdiff_t ; typedef long unsigned int __darwin_size_t ; typedef void * __darwin_va_list ; typedef int __darwin_wchar_t ; typedef __darwin_wchar_t __darwin_rune_t ; typedef int __darwin_wint_t ; typedef unsigned long __darwin_clock_t ; typedef __uint32_t __darwin_socklen_t ; typedef long __darwin_ssize_t ; typedef long __darwin_time_t ; typedef signed char int8_t ; typedef short int16_t ; typedef int int32_t ; typedef long long int64_t ; typedef unsigned char u_int8_t ; typedef unsigned short u_int16_t ; typedef unsigned int u_int32_t ; typedef unsigned long long u_int64_t ; typedef int64_t register_t ; typedef __darwin_intptr_t intptr_t ; typedef unsigned long uintptr_t ; typedef u_int64_t user_addr_t ; typedef u_int64_t user_size_t ; typedef int64_t user_ssize_t ; typedef int64_t user_long_t ; typedef u_int64_t user_ulong_t ; typedef int64_t user_time_t ; typedef int64_t user_off_t ; typedef u_int64_t syscall_arg_t ; typedef __int64_t __darwin_blkcnt_t ; typedef __int32_t __darwin_blksize_t ; typedef __int32_t __darwin_dev_t ; typedef unsigned int __darwin_fsblkcnt_t ; typedef unsigned int __darwin_fsfilcnt_t ; typedef __uint32_t __darwin_gid_t ; typedef __uint32_t __darwin_id_t ; typedef __uint64_t __darwin_ino64_t ; typedef __darwin_ino64_t __darwin_ino_t ; typedef __darwin_natural_t __darwin_mach_port_name_t ; typedef __darwin_mach_port_name_t __darwin_mach_port_t ; typedef __uint16_t __darwin_mode_t ; typedef __int64_t __darwin_off_t ; typedef __int32_t __darwin_pid_t ; typedef __uint32_t __darwin_sigset_t ; typedef __int32_t __darwin_suseconds_t ; typedef __uint32_t __darwin_uid_t ; typedef __uint32_t __darwin_useconds_t ; typedef unsigned char __darwin_uuid_t [ 16 ] ; typedef char __darwin_uuid_string_t [ 37 ] ; struct __darwin_pthread_handler_rec { void ( * __routine ) ( void * ) ; void * __arg ; struct __darwin_pthread_handler_rec * __next ; } ; struct _opaque_pthread_attr_t { long __sig ; char __opaque [ 56 ] ; } ; struct _opaque_pthread_cond_t { long __sig ; char __opaque [ 40 ] ; } ; struct _opaque_pthread_condattr_t { long __sig ; char __opaque [ 8 ] ; } ; struct _opaque_pthread_mutex_t { long __sig ; char __opaque [ 56 ] ; } ; struct _opaque_pthread_mutexattr_t { long __sig ; char __opaque [ 8 ] ; } ; struct _opaque_pthread_once_t { long __sig ; char __opaque [ 8 ] ; } ; struct _opaque_pthread_rwlock_t { long __sig ; char __opaque [ 192 ] ; } ; struct _opaque_pthread_rwlockattr_t { long __sig ; char __opaque [ 16 ] ; } ; struct _opaque_pthread_t { long __sig ; struct __darwin_pthread_handler_rec * __cleanup_stack ; char __opaque [ 8176 ] ; } ; typedef struct _opaque_pthread_attr_t __darwin_pthread_attr_t ; typedef struct _opaque_pthread_cond_t __darwin_pthread_cond_t ; typedef struct _opaque_pthread_condattr_t __darwin_pthread_condattr_t ; typedef unsigned long __darwin_pthread_key_t ; typedef struct _opaque_pthread_mutex_t __darwin_pthread_mutex_t ; typedef struct _opaque_pthread_mutexattr_t __darwin_pthread_mutexattr_t ; typedef struct _opaque_pthread_once_t __darwin_pthread_once_t ; typedef struct _opaque_pthread_rwlock_t __darwin_pthread_rwlock_t ; typedef struct _opaque_pthread_rwlockattr_t __darwin_pthread_rwlockattr_t ; typedef struct _opaque_pthread_t * __darwin_pthread_t ; typedef unsigned char u_char ; typedef unsigned short u_short ; typedef unsigned int u_int ; typedef unsigned long u_long ; typedef unsigned short ushort ; typedef unsigned int uint ; typedef u_int64_t u_quad_t ; typedef int64_t quad_t ; typedef quad_t * qaddr_t ; typedef char * caddr_t ; typedef int32_t daddr_t ; typedef __darwin_dev_t dev_t ; typedef u_int32_t fixpt_t ; typedef __darwin_blkcnt_t blkcnt_t ; typedef __darwin_blksize_t blksize_t ; typedef __darwin_gid_t gid_t ; typedef __uint32_t in_addr_t ; typedef __uint16_t in_port_t ; typedef __darwin_ino_t ino_t ; typedef __darwin_ino64_t ino64_t ; typedef __int32_t key_t ; typedef __darwin_mode_t mode_t ; typedef __uint16_t nlink_t ; typedef __darwin_id_t id_t ; typedef __darwin_pid_t pid_t ; typedef __darwin_off_t off_t ; typedef int32_t segsz_t ; typedef int32_t swblk_t ; typedef __darwin_uid_t uid_t ; typedef __darwin_clock_t clock_t ; typedef __darwin_size_t size_t ; typedef __darwin_ssize_t ssize_t ; typedef __darwin_time_t time_t ; typedef __darwin_useconds_t useconds_t ; typedef __darwin_suseconds_t suseconds_t ; typedef __darwin_size_t rsize_t ; typedef int errno_t ; typedef struct fd_set { __int32_t fds_bits [ ( ( ( ( 1024 ) % ( ( sizeof ( __int32_t ) * 8 ) ) ) == 0 ) ? ( ( 1024 ) / ( ( sizeof ( __int32_t ) * 8 ) ) ) : ( ( ( 1024 ) / ( ( sizeof ( __int32_t ) * 8 ) ) ) + 1 ) ) ] ; } fd_set ; int __darwin_check_fd_set_overflow ( int , const void * , int ) ; static int __darwin_check_fd_set ( int _a , const void * _b ) { if ( ( uintptr_t ) & __darwin_check_fd_set_overflow != ( uintptr_t ) 0 ) { return __darwin_check_fd_set_overflow ( _a , _b , 0 ) ; } else { return 1 ; } } static int __darwin_fd_isset ( int _fd , const struct fd_set * _p ) { if ( __darwin_check_fd_set ( _fd , ( const void * ) _p ) ) { return _p -> fds_bits [ ( unsigned long ) _fd / ( sizeof ( __int32_t ) * 8 ) ] & ( ( __int32_t ) ( ( ( unsigned long ) 1 ) << ( ( unsigned long ) _fd % ( sizeof ( __int32_t ) * 8 ) ) ) ) ; } return 0 ; } static void __darwin_fd_set ( int _fd , struct fd_set * const _p ) { if ( __darwin_check_fd_set ( _fd , ( const void * ) _p ) ) { ( _p -> fds_bits [ ( unsigned long ) _fd / ( sizeof ( __int32_t ) * 8 ) ] |= ( ( __int32_t ) ( ( ( unsigned long ) 1 ) << ( ( unsigned long ) _fd % ( sizeof ( __int32_t ) * 8 ) ) ) ) ) ; } } static void __darwin_fd_clr ( int _fd , struct fd_set * const _p ) { if ( __darwin_check_fd_set ( _fd , ( const void * ) _p ) ) { ( _p -> fds_bits [ ( unsigned long ) _fd / ( sizeof ( __int32_t ) * 8 ) ] &= ~ ( ( __int32_t ) ( ( ( unsigned long ) 1 ) << ( ( unsigned long ) _fd % ( sizeof ( __int32_t ) * 8 ) ) ) ) ) ; } } typedef __int32_t fd_mask ; typedef __darwin_pthread_attr_t pthread_attr_t ; typedef __darwin_pthread_cond_t pthread_cond_t ; typedef __darwin_pthread_condattr_t pthread_condattr_t ; typedef __darwin_pthread_mutex_t pthread_mutex_t ; typedef __darwin_pthread_mutexattr_t pthread_mutexattr_t ; typedef __darwin_pthread_once_t pthread_once_t ; typedef __darwin_pthread_rwlock_t pthread_rwlock_t ; typedef __darwin_pthread_rwlockattr_t pthread_rwlockattr_t ; typedef __darwin_pthread_t pthread_t ; typedef __darwin_pthread_key_t pthread_key_t ; typedef __darwin_fsblkcnt_t fsblkcnt_t ; typedef __darwin_fsfilcnt_t fsfilcnt_t ; typedef int __darwin_nl_item ; typedef int __darwin_wctrans_t ; typedef __uint32_t __darwin_wctype_t ; typedef __darwin_mbstate_t mbstate_t ; typedef __darwin_ct_rune_t ct_rune_t ; typedef __darwin_rune_t rune_t ; typedef __darwin_wchar_t wchar_t ; typedef __builtin_va_list __gnuc_va_list ; typedef __builtin_va_list va_list ; typedef __darwin_va_list va_list ; int renameat ( int , const char * , int , const char * ) ; int renamex_np ( const char * , const char * , unsigned int ) ; int renameatx_np ( int , const char * , int , const char * , unsigned int ) ; typedef __darwin_off_t fpos_t ; struct __sbuf { unsigned char * _base ; int _size ; } ; struct __sFILEX ; typedef struct __sFILE { unsigned char * _p ; int _r ; int _w ; short _flags ; short _file ; struct __sbuf _bf ; int _lbfsize ; void * _cookie ; int ( * _close ) ( void * ) ; int ( * _read ) ( void * , char * , int ) ; fpos_t ( * _seek ) ( void * , fpos_t , int ) ; int ( * _write ) ( void * , const char * , int ) ; struct __sbuf _ub ; struct __sFILEX * _extra ; int _ur ; unsigned char _ubuf [ 3 ] ; unsigned char _nbuf [ 1 ] ; struct __sbuf _lb ; int _blksize ; fpos_t _offset ; } FILE ; extern FILE * __stdinp ; extern FILE * __stdoutp ; extern FILE * __stderrp ; void clearerr ( FILE * ) ; int fclose ( FILE * ) ; int feof ( FILE * ) ; int ferror ( FILE * ) ; int fflush ( FILE * ) ; int fgetc ( FILE * ) ; int fgetpos ( FILE * , fpos_t * ) ; char * fgets ( char * , int , FILE * ) ; FILE * fopen ( const char * __filename , const char * __mode ) __asm ( "_" "fopen" ) ; int fprintf ( FILE * , const char * , ... ) __attribute__ ( ( __format__ ( __printf__ , 2 , 3 ) ) ) ; int fputc ( int , FILE * ) ; int fputs ( const char * , FILE * ) __asm ( "_" "fputs" ) ; size_t fread ( void * __ptr , size_t __size , size_t __nitems , FILE * __stream ) ; FILE * freopen ( const char * , const char * , FILE * ) __asm ( "_" "freopen" ) ; int fscanf ( FILE * , const char * , ... ) __attribute__ ( ( __format__ ( __scanf__ , 2 , 3 ) ) ) ; int fseek ( FILE * , long , int ) ; int fsetpos ( FILE * , const fpos_t * ) ; long ftell ( FILE * ) ; size_t fwrite ( const void * __ptr , size_t __size , size_t __nitems , FILE * __stream ) __asm ( "_" "fwrite" ) ; int getc ( FILE * ) ; int getchar ( void ) ; __attribute__ ( ( __deprecated__ ) ) char * gets ( char * ) ; void perror ( const char * ) ; int printf ( const char * , ... ) __attribute__ ( ( __format__ ( __printf__ , 1 , 2 ) ) ) ; int putc ( int , FILE * ) ; int putchar ( int ) ; int puts ( const char * ) ; int remove ( const char * ) ; int rename ( const char * __old , const char * __new ) ; void rewind ( FILE * ) ; int scanf ( const char * , ... ) __attribute__ ( ( __format__ ( __scanf__ , 1 , 2 ) ) ) ; void setbuf ( FILE * , char * ) ; int setvbuf ( FILE * , char * , int , size_t ) ; __attribute__ ( ( __deprecated__ ) ) int sprintf ( char * , const char * , ... ) __attribute__ ( ( __format__ ( __printf__ , 2 , 3 ) ) ) ; int sscanf ( const char * , const char * , ... ) __attribute__ ( ( __format__ ( __scanf__ , 2 , 3 ) ) ) ; FILE * tmpfile ( void ) ; __attribute__ ( ( __deprecated__ ) ) char * tmpnam ( char * ) ; int ungetc ( int , FILE * ) ; int vfprintf ( FILE * , const char * , va_list ) __attribute__ ( ( __format__ ( __printf__ , 2 , 0 ) ) ) ; int vprintf ( const char * , va_list ) __attribute__ ( ( __format__ ( __printf__ , 1 , 0 ) ) ) ; __attribute__ ( ( __deprecated__ ) ) int vsprintf ( char * , const char * , va_list ) __attribute__ ( ( __format__ ( __printf__ , 2 , 0 ) ) ) ; char * ctermid ( char * ) ; FILE * fdopen ( int , const char * ) __asm ( "_" "fdopen" ) ; int fileno ( FILE * ) ; int pclose ( FILE * ) ; FILE * popen ( const char * , const char * ) __asm ( "_" "popen" ) ; int __srget ( FILE * ) ; int __svfscanf ( FILE * , const char * , va_list ) __attribute__ ( ( __format__ ( __scanf__ , 2 , 0 ) ) ) ; int __swbuf ( int , FILE * ) ; void flockfile ( FILE * ) ; int ftrylockfile ( FILE * ) ; void funlockfile ( FILE * ) ; int getc_unlocked ( FILE * ) ; int getchar_unlocked ( void ) ; int putc_unlocked ( int , FILE * ) ; int putchar_unlocked ( int ) ; int getw ( FILE * ) ; int putw ( int , FILE * ) ; __attribute__ ( ( __deprecated__ ) ) char * tempnam ( const char * __dir , const char * __prefix ) __asm ( "_" "tempnam" ) ; int fseeko ( FILE * __stream , off_t __offset , int __whence ) ; off_t ftello ( FILE * __stream ) ; int snprintf ( char * __str , size_t __size , const char * __format , ... ) __attribute__ ( ( __format__ ( __printf__ , 3 , 4 ) ) ) ; int vfscanf ( FILE * __stream , const char * __format , va_list ) __attribute__ ( ( __format__ ( __scanf__ , 2 , 0 ) ) ) ; int vscanf ( const char * __format , va_list ) __attribute__ ( ( __format__ ( __scanf__ , 1 , 0 ) ) ) ; int vsnprintf ( char * __str , size_t __size , const char * __format , va_list ) __attribute__ ( ( __format__ ( __printf__ , 3 , 0 ) ) ) ; int vsscanf ( const char * __str , const char * __format , va_list ) __attribute__ ( ( __format__ ( __scanf__ , 2 , 0 ) ) ) ; int dprintf ( int , const char * , ... ) __attribute__ ( ( __format__ ( __printf__ , 2 , 3 ) ) ) ; int vdprintf ( int , const char * , va_list ) __attribute__ ( ( __format__ ( __printf__ , 2 , 0 ) ) ) ; ssize_t getdelim ( char * * __linep , size_t * __linecapp , int __delimiter , FILE * __stream ) ; ssize_t getline ( char * * __linep , size_t * __linecapp , FILE * __stream ) ; FILE * fmemopen ( void * __buf , size_t __size , const char * __mode ) ; FILE * open_memstream ( char * * __bufp , size_t * __sizep ) ; extern const int sys_nerr ; extern const char * const sys_errlist [ ] ; int asprintf ( char * * , const char * , ... ) __attribute__ ( ( __format__ ( __printf__ , 2 , 3 ) ) ) ; char * ctermid_r ( char * ) ; char * fgetln ( FILE * , size_t * ) ; const char * fmtcheck ( const char * , const char * ) __attribute__ ( ( format_arg ( 2 ) ) ) ; int fpurge ( FILE * ) ; void setbuffer ( FILE * , char * , int ) ; int setlinebuf ( FILE * ) ; int vasprintf ( char * * , const char * , va_list ) __attribute__ ( ( __format__ ( __printf__ , 2 , 0 ) ) ) ; FILE * funopen ( const void * , int ( * ) ( void * , char * , int ) , int ( * ) ( void * , const char * , int ) , fpos_t ( * ) ( void * , fpos_t , int ) , int ( * ) ( void * ) ) ; struct timespec { __darwin_time_t tv_sec ; long tv_nsec ; } ; struct tm { int tm_sec ; int tm_min ; int tm_hour ; int tm_mday ; int tm_mon ; int tm_year ; int tm_wday ; int tm_yday ; int tm_isdst ; long tm_gmtoff ; char * tm_zone ; } ; extern char * tzname [ ] ; extern int getdate_err ; extern long timezone __asm ( "_" "timezone" ) ; extern int daylight ; char * asctime ( const struct tm * ) ; clock_t clock ( void ) __asm ( "_" "clock" ) ; char * ctime ( const time_t * ) ; double difftime ( time_t , time_t ) ; struct tm * getdate ( const char * ) ; struct tm * gmtime ( const time_t * ) ; struct tm * localtime ( const time_t * ) ; time_t mktime ( struct tm * ) __asm ( "_" "mktime" ) ; size_t strftime ( char * , size_t , const char * , const struct tm * ) __asm ( "_" "strftime" ) ; char * strptime ( const char * , const char * , struct tm * ) __asm ( "_" "strptime" ) ; time_t time ( time_t * ) ; void tzset ( void ) ; char * asctime_r ( const struct tm * , char * ) ; char * ctime_r ( const time_t * , char * ) ; struct tm * gmtime_r ( const time_t * , struct tm * ) ; struct tm * localtime_r ( const time_t * , struct tm * ) ; time_t posix2time ( time_t ) ; void tzsetwall ( void ) ; time_t time2posix ( time_t ) ; time_t timelocal ( struct tm * const ) ; time_t timegm ( struct tm * const ) ; int nanosleep ( const struct timespec * __rqtp , struct timespec * __rmtp ) __asm ( "_" "nanosleep" __DARWIN_SUF_NON_CANCELABLE ) ; typedef enum { _CLOCK_REALTIME = 0 , _CLOCK_MONOTONIC = 6 , _CLOCK_MONOTONIC_RAW = 4 , _CLOCK_MONOTONIC_RAW_APPROX = 5 , _CLOCK_UPTIME_RAW = 8 , _CLOCK_UPTIME_RAW_APPROX = 9 , _CLOCK_PROCESS_CPUTIME_ID = 12 , _CLOCK_THREAD_CPUTIME_ID = 16 } clockid_t ; int clock_getres ( clockid_t __clock_id , struct timespec * __res ) ; int clock_gettime ( clockid_t __clock_id , struct timespec * __tp ) ; __uint64_t clock_gettime_nsec_np ( clockid_t __clock_id ) ; int clock_settime ( clockid_t __clock_id , const struct timespec * __tp ) ; int timespec_get ( struct timespec * ts , int base ) ; typedef __darwin_wint_t wint_t ; typedef __darwin_wctype_t wctype_t ; typedef struct { __darwin_rune_t __min ; __darwin_rune_t __max ; __darwin_rune_t __map ; __uint32_t * __types ; } _RuneEntry ; typedef struct { int __nranges ; _RuneEntry * __ranges ; } _RuneRange ; typedef struct { char __name [ 14 ] ; __uint32_t __mask ; } _RuneCharClass ; typedef struct { char __magic [ 8 ] ; char __encoding [ 32 ] ; __darwin_rune_t ( * __sgetrune ) ( const char * , __darwin_size_t , char const * * ) ; int ( * __sputrune ) ( __darwin_rune_t , char * , __darwin_size_t , char * * ) ; __darwin_rune_t __invalid_rune ; __uint32_t __runetype [ ( 1 << 8 ) ] ; __darwin_rune_t __maplower [ ( 1 << 8 ) ] ; __darwin_rune_t __mapupper [ ( 1 << 8 ) ] ; _RuneRange __runetype_ext ; _RuneRange __maplower_ext ; _RuneRange __mapupper_ext ; void * __variable ; int __variable_len ; int __ncharclasses ; _RuneCharClass * __charclasses ; } _RuneLocale ; extern _RuneLocale _DefaultRuneLocale ; extern _RuneLocale * _CurrentRuneLocale ; int isalnum ( int ) ; int isalpha ( int ) ; int isblank ( int ) ; int iscntrl ( int ) ; int isdigit ( int ) ; int isgraph ( int ) ; int islower ( int ) ; int isprint ( int ) ; int ispunct ( int ) ; int isspace ( int ) ; int isupper ( int ) ; int isxdigit ( int ) ; int tolower ( int ) ; int toupper ( int ) ; int isascii ( int ) ; int toascii ( int ) ; int _tolower ( int ) ; int _toupper ( int ) ; int digittoint ( int ) ; int ishexnumber ( int ) ; int isideogram ( int ) ; int isnumber ( int ) ; int isphonogram ( int ) ; int isrune ( int ) ; int isspecial ( int ) ; int iswalnum ( wint_t ) ; int iswalpha ( wint_t ) ; int iswcntrl ( wint_t ) ; int iswctype ( wint_t , wctype_t ) ; int iswdigit ( wint_t ) ; int iswgraph ( wint_t ) ; int iswlower ( wint_t ) ; int iswprint ( wint_t ) ; int iswpunct ( wint_t ) ; int iswspace ( wint_t ) ; int iswupper ( wint_t ) ; int iswxdigit ( wint_t ) ; wint_t towlower ( wint_t ) ; wint_t towupper ( wint_t ) ; wctype_t wctype ( const char * ) ; wint_t btowc ( int ) ; wint_t fgetwc ( FILE * ) ; wchar_t * fgetws ( wchar_t * , int , FILE * ) ; wint_t fputwc ( wchar_t , FILE * ) ; int fputws ( const wchar_t * , FILE * ) ; int fwide ( FILE * , int ) ; int fwprintf ( FILE * , const wchar_t * , ... ) ; int fwscanf ( FILE * , const wchar_t * , ... ) ; wint_t getwc ( FILE * ) ; wint_t getwchar ( void ) ; size_t mbrlen ( const char * , size_t , mbstate_t * ) ; size_t mbrtowc ( wchar_t * , const char * , size_t , mbstate_t * ) ; int mbsinit ( const mbstate_t * ) ; size_t mbsrtowcs ( wchar_t * , const char * * , size_t , mbstate_t * ) ; wint_t putwc ( wchar_t , FILE * ) ; wint_t putwchar ( wchar_t ) ; int swprintf ( wchar_t * , size_t , const wchar_t * , ... ) ; int swscanf ( const wchar_t * , const wchar_t * , ... ) ; wint_t ungetwc ( wint_t , FILE * ) ; int vfwprintf ( FILE * , const wchar_t * , __darwin_va_list ) ; int vswprintf ( wchar_t * , size_t , const wchar_t * , __darwin_va_list ) ; int vwprintf ( const wchar_t * , __darwin_va_list ) ; size_t wcrtomb ( char * , wchar_t , mbstate_t * ) ; wchar_t * wcscat ( wchar_t * , const wchar_t * ) ; wchar_t * wcschr ( const wchar_t * , wchar_t ) ; int wcscmp ( const wchar_t * , const wchar_t * ) ; int wcscoll ( const wchar_t * , const wchar_t * ) ; wchar_t * wcscpy ( wchar_t * , const wchar_t * ) ; size_t wcscspn ( const wchar_t * , const wchar_t * ) ; size_t wcsftime ( wchar_t * , size_t , const wchar_t * , const struct tm * ) __asm ( "_" "wcsftime" ) ; size_t wcslen ( const wchar_t * ) ; wchar_t * wcsncat ( wchar_t * , const wchar_t * , size_t ) ; int wcsncmp ( const wchar_t * , const wchar_t * , size_t ) ; wchar_t * wcsncpy ( wchar_t * , const wchar_t * , size_t ) ; wchar_t * wcspbrk ( const wchar_t * , const wchar_t * ) ; wchar_t * wcsrchr ( const wchar_t * , wchar_t ) ; size_t wcsrtombs ( char * , const wchar_t * * , size_t , mbstate_t * ) ; size_t wcsspn ( const wchar_t * , const wchar_t * ) ; wchar_t * wcsstr ( const wchar_t * , const wchar_t * ) ; size_t wcsxfrm ( wchar_t * , const wchar_t * , size_t ) ; int wctob ( wint_t ) ; double wcstod ( const wchar_t * , wchar_t * * ) ; wchar_t * wcstok ( wchar_t * , const wchar_t * , wchar_t * * ) ; long wcstol ( const wchar_t * , wchar_t * * , int ) ; unsigned long wcstoul ( const wchar_t * , wchar_t * * , int ) ; wchar_t * wmemchr ( const wchar_t * , wchar_t , size_t ) ; int wmemcmp ( const wchar_t * , const wchar_t * , size_t ) ; wchar_t * wmemcpy ( wchar_t * , const wchar_t * , size_t ) ; wchar_t * wmemmove ( wchar_t * , const wchar_t * , size_t ) ; wchar_t * wmemset ( wchar_t * , wchar_t , size_t ) ; int wprintf ( const wchar_t * , ... ) ; int wscanf ( const wchar_t * , ... ) ; int wcswidth ( const wchar_t * , size_t ) ; int wcwidth ( wchar_t ) ; int vfwscanf ( FILE * , const wchar_t * , __darwin_va_list ) ; int vswscanf ( const wchar_t * , const wchar_t * , __darwin_va_list ) ; int vwscanf ( const wchar_t * , __darwin_va_list ) ; float wcstof ( const wchar_t * , wchar_t * * ) ; long double wcstold ( const wchar_t * , wchar_t * * ) ; long long wcstoll ( const wchar_t * , wchar_t * * , int ) ; unsigned long long wcstoull ( const wchar_t * , wchar_t * * , int ) ; size_t mbsnrtowcs ( wchar_t * , const char * * , size_t , size_t , mbstate_t * ) ; wchar_t * wcpcpy ( wchar_t * , const wchar_t * ) ; wchar_t * wcpncpy ( wchar_t * , const wchar_t * , size_t ) ; wchar_t * wcsdup ( const wchar_t * ) ; int wcscasecmp ( const wchar_t * , const wchar_t * ) ; int wcsncasecmp ( const wchar_t * , const wchar_t * , size_t n ) ; size_t wcsnlen ( const wchar_t * , size_t ) ; size_t wcsnrtombs ( char * , const wchar_t * * , size_t , size_t , mbstate_t * ) ; FILE * open_wmemstream ( wchar_t * * __bufp , size_t * __sizep ) ; wchar_t * fgetwln ( FILE * , size_t * ) ; size_t wcslcat ( wchar_t * , const wchar_t * , size_t ) ; size_t wcslcpy ( wchar_t * , const wchar_t * , size_t ) ; typedef int __iconv_bool ; struct __tag_iconv_t ; typedef struct __tag_iconv_t * iconv_t ; extern int _libiconv_version ; iconv_t iconv_open ( const char * , const char * ) ; size_t iconv ( iconv_t , char * * , size_t * , char * * , size_t * ) ; int iconv_close ( iconv_t ) ; int __iconv_get_list ( char * * * , size_t * , __iconv_bool ) ; void __iconv_free_list ( char * * , size_t ) ; size_t __iconv ( iconv_t , char * * , size_t * , char * * , size_t * , __uint32_t , size_t * ) ; typedef struct { void * spaceholder [ 64 ] ; } iconv_allocation_t ; int iconv_open_into ( const char * , const char * , iconv_allocation_t * ) ; void libiconv_set_relocation_prefix ( const char * , const char * ) ; typedef void ( * iconv_unicode_char_hook ) ( unsigned int mbr , void * data ) ; typedef void ( * iconv_wide_char_hook ) ( wchar_t wc , void * data ) ; struct iconv_hooks { iconv_unicode_char_hook uc_hook ; iconv_wide_char_hook wc_hook ; void * data ; } ; typedef void ( * iconv_unicode_mb_to_uc_fallback ) ( const char * , size_t , void ( * write_replacement ) ( const unsigned int * , size_t , void * ) , void * , void * ) ; typedef void ( * iconv_unicode_uc_to_mb_fallback ) ( unsigned int , void ( * write_replacement ) ( const char * , size_t , void * ) , void * , void * ) ; typedef void ( * iconv_wchar_mb_to_wc_fallback ) ( const char * , size_t , void ( * write_replacement ) ( const wchar_t * , size_t , void * ) , void * , void * ) ; typedef void ( * iconv_wchar_wc_to_mb_fallback ) ( wchar_t , void ( * write_replacement ) ( const char * , size_t , void * ) , void * , void * ) ; struct iconv_fallbacks { iconv_unicode_mb_to_uc_fallback mb_to_uc_fallback ; iconv_unicode_uc_to_mb_fallback uc_to_mb_fallback ; iconv_wchar_mb_to_wc_fallback mb_to_wc_fallback ; iconv_wchar_wc_to_mb_fallback wc_to_mb_fallback ; void * data ; } ; void iconvlist ( int ( * do_one ) ( unsigned int , const char * const * , void * ) , void * ) ; const char * iconv_canonicalize ( const char * ) ; int iconvctl ( iconv_t , int , void * ) ; int main ( ) { iconv_t cd ; cd = iconv_open ( "IBM1047" , "UTF-8" ) ; if ( cd == ( iconv_t ) - 1 ) return 1 ; return 0 ; } 
+typedef int __uint128_t;
+typedef int __int128_t;
+typedef int __builtin_va_list;
+extern float _Complex cacosf(float _Complex);
+extern double _Complex cacos(double _Complex);
+extern long double _Complex cacosl(long double _Complex);
+extern float _Complex casinf(float _Complex);
+extern double _Complex casin(double _Complex);
+extern long double _Complex casinl(long double _Complex);
+extern float _Complex catanf(float _Complex);
+extern double _Complex catan(double _Complex);
+extern long double _Complex catanl(long double _Complex);
+extern float _Complex ccosf(float _Complex);
+extern double _Complex ccos(double _Complex);
+extern long double _Complex ccosl(long double _Complex);
+extern float _Complex csinf(float _Complex);
+extern double _Complex csin(double _Complex);
+extern long double _Complex csinl(long double _Complex);
+extern float _Complex ctanf(float _Complex);
+extern double _Complex ctan(double _Complex);
+extern long double _Complex ctanl(long double _Complex);
+extern float _Complex cacoshf(float _Complex);
+extern double _Complex cacosh(double _Complex);
+extern long double _Complex cacoshl(long double _Complex);
+extern float _Complex casinhf(float _Complex);
+extern double _Complex casinh(double _Complex);
+extern long double _Complex casinhl(long double _Complex);
+extern float _Complex catanhf(float _Complex);
+extern double _Complex catanh(double _Complex);
+extern long double _Complex catanhl(long double _Complex);
+extern float _Complex ccoshf(float _Complex);
+extern double _Complex ccosh(double _Complex);
+extern long double _Complex ccoshl(long double _Complex);
+extern float _Complex csinhf(float _Complex);
+extern double _Complex csinh(double _Complex);
+extern long double _Complex csinhl(long double _Complex);
+extern float _Complex ctanhf(float _Complex);
+extern double _Complex ctanh(double _Complex);
+extern long double _Complex ctanhl(long double _Complex);
+extern float _Complex cexpf(float _Complex);
+extern double _Complex cexp(double _Complex);
+extern long double _Complex cexpl(long double _Complex);
+extern float _Complex clogf(float _Complex);
+extern double _Complex clog(double _Complex);
+extern long double _Complex clogl(long double _Complex);
+extern float cabsf(float _Complex);
+extern double cabs(double _Complex);
+extern long double cabsl(long double _Complex);
+extern float _Complex cpowf(float _Complex, float _Complex);
+extern double _Complex cpow(double _Complex, double _Complex);
+extern long double _Complex cpowl(long double _Complex, long double _Complex);
+extern float _Complex csqrtf(float _Complex);
+extern double _Complex csqrt(double _Complex);
+extern long double _Complex csqrtl(long double _Complex);
+extern float cargf(float _Complex);
+extern double carg(double _Complex);
+extern long double cargl(long double _Complex);
+extern float cimagf(float _Complex);
+extern double cimag(double _Complex);
+extern long double cimagl(long double _Complex);
+extern float _Complex conjf(float _Complex);
+extern double _Complex conj(double _Complex);
+extern long double _Complex conjl(long double _Complex);
+extern float _Complex cprojf(float _Complex);
+extern double _Complex cproj(double _Complex);
+extern long double _Complex cprojl(long double _Complex);
+extern float crealf(float _Complex);
+extern double creal(double _Complex);
+extern long double creall(long double _Complex);
+extern void abort(void);
+extern int fails;
+typedef struct
+{
+    float f;
+    double d;
+} Sfd;
+typedef struct
+{
+    float f;
+    long double l;
+} Sfl;
+typedef struct
+{
+    double d;
+    float f;
+} Sdf;
+typedef struct
+{
+    double d;
+    long double l;
+} Sdl;
+typedef struct
+{
+    long double l;
+    float f;
+} Slf;
+typedef struct
+{
+    long double l;
+    double d;
+} Sld;
+typedef struct
+{
+    float f;
+    double d;
+    long double l;
+} Sfdl;
+typedef struct
+{
+    float f;
+    long double l;
+    double d;
+} Sfld;
+typedef struct
+{
+    double d;
+    float f;
+    long double l;
+} Sdfl;
+typedef struct
+{
+    double d;
+    long double l;
+    float f;
+} Sdlf;
+typedef struct
+{
+    long double l;
+    float f;
+    double d;
+} Slfd;
+typedef struct
+{
+    long double l;
+    double d;
+    float f;
+} Sldf;
+void checkSfd(Sfd x, double y)
+{
+    if (x.f != y || x.d != y + 1)
+        abort();
+}
+void checkSfl(Sfl x, double y)
+{
+    if (x.f != y || x.l != y + 1)
+        abort();
+}
+void checkSdf(Sdf x, double y)
+{
+    if (x.d != y || x.f != y + 1)
+        abort();
+}
+void checkSdl(Sdl x, double y)
+{
+    if (x.d != y || x.l != y + 1)
+        abort();
+}
+void checkSlf(Slf x, double y)
+{
+    if (x.l != y || x.f != y + 1)
+        abort();
+}
+void checkSld(Sld x, double y)
+{
+    if (x.l != y || x.d != y + 1)
+        abort();
+}
+void checkSfdl(Sfdl x, double y)
+{
+    if (x.f != y || x.d != y + 1 || x.l != y + 2)
+        abort();
+}
+void checkSfld(Sfld x, double y)
+{
+    if (x.f != y || x.l != y + 1 || x.d != y + 2)
+        abort();
+}
+void checkSdfl(Sdfl x, double y)
+{
+    if (x.d != y || x.f != y + 1 || x.l != y + 2)
+        abort();
+}
+void checkSdlf(Sdlf x, double y)
+{
+    if (x.d != y || x.l != y + 1 || x.f != y + 2)
+        abort();
+}
+void checkSlfd(Slfd x, double y)
+{
+    if (x.l != y || x.f != y + 1 || x.d != y + 2)
+        abort();
+}
+void checkSldf(Sldf x, double y)
+{
+    if (x.l != y || x.d != y + 1 || x.f != y + 2)
+        abort();
+}
+Sfd g1sSfd, g2sSfd, g3sSfd, g4sSfd;
+Sfd g5sSfd, g6sSfd, g7sSfd, g8sSfd;
+Sfd g9sSfd, g10sSfd, g11sSfd, g12sSfd;
+Sfd g13sSfd, g14sSfd, g15sSfd, g16sSfd;
+extern void initSfd(Sfd *p, double x);
+extern void checkgSfd(void);
+extern void testSfd(Sfd s1, Sfd s2, Sfd s3, Sfd s4, Sfd s5, Sfd s6, Sfd s7, Sfd s8, Sfd s9, Sfd s10, Sfd s11, Sfd s12, Sfd s13, Sfd s14, Sfd s15, Sfd s16);
+extern void testvaSfd(int n, ...);
+void test2_Sfd(Sfd s1, Sfd s2, Sfd s3, Sfd s4, Sfd s5, Sfd s6, Sfd s7, Sfd s8) { testSfd(s1, g2sSfd, s2, g4sSfd, s3, g6sSfd, s4, g8sSfd, s5, g10sSfd, s6, g12sSfd, s7, g14sSfd, s8, g16sSfd); }
+void testitSfd(void)
+{
+    ;
+    ;
+    initSfd(&g1sSfd, (double)1);
+    initSfd(&g2sSfd, (double)2);
+    initSfd(&g3sSfd, (double)3);
+    initSfd(&g4sSfd, (double)4);
+    initSfd(&g5sSfd, (double)5);
+    initSfd(&g6sSfd, (double)6);
+    initSfd(&g7sSfd, (double)7);
+    initSfd(&g8sSfd, (double)8);
+    initSfd(&g9sSfd, (double)9);
+    initSfd(&g10sSfd, (double)10);
+    initSfd(&g11sSfd, (double)11);
+    initSfd(&g12sSfd, (double)12);
+    initSfd(&g13sSfd, (double)13);
+    initSfd(&g14sSfd, (double)14);
+    initSfd(&g15sSfd, (double)15);
+    initSfd(&g16sSfd, (double)16);
+    checkgSfd();
+    ;
+    ;
+    ;
+    testSfd(g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd, g8sSfd, g9sSfd, g10sSfd, g11sSfd, g12sSfd, g13sSfd, g14sSfd, g15sSfd, g16sSfd);
+    ;
+    ;
+    ;
+    ;
+    testvaSfd(1, g1sSfd);
+    ;
+    testvaSfd(2, g1sSfd, g2sSfd);
+    ;
+    testvaSfd(3, g1sSfd, g2sSfd, g3sSfd);
+    ;
+    testvaSfd(4, g1sSfd, g2sSfd, g3sSfd, g4sSfd);
+    ;
+    testvaSfd(5, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd);
+    ;
+    testvaSfd(6, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd);
+    ;
+    testvaSfd(7, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd);
+    ;
+    testvaSfd(8, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd, g8sSfd);
+    ;
+    testvaSfd(9, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd, g8sSfd, g9sSfd);
+    ;
+    testvaSfd(10, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd, g8sSfd, g9sSfd, g10sSfd);
+    ;
+    testvaSfd(11, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd, g8sSfd, g9sSfd, g10sSfd, g11sSfd);
+    ;
+    testvaSfd(12, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd, g8sSfd, g9sSfd, g10sSfd, g11sSfd, g12sSfd);
+    ;
+    testvaSfd(13, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd, g8sSfd, g9sSfd, g10sSfd, g11sSfd, g12sSfd, g13sSfd);
+    ;
+    testvaSfd(14, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd, g8sSfd, g9sSfd, g10sSfd, g11sSfd, g12sSfd, g13sSfd, g14sSfd);
+    ;
+    testvaSfd(15, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd, g8sSfd, g9sSfd, g10sSfd, g11sSfd, g12sSfd, g13sSfd, g14sSfd, g15sSfd);
+    ;
+    testvaSfd(16, g1sSfd, g2sSfd, g3sSfd, g4sSfd, g5sSfd, g6sSfd, g7sSfd, g8sSfd, g9sSfd, g10sSfd, g11sSfd, g12sSfd, g13sSfd, g14sSfd, g15sSfd, g16sSfd);
+    ;
+    ;
+    ;
+    test2_Sfd(g1sSfd, g3sSfd, g5sSfd, g7sSfd, g9sSfd, g11sSfd, g13sSfd, g15sSfd);
+    ;
+}
+Sfl g1sSfl, g2sSfl, g3sSfl, g4sSfl;
+Sfl g5sSfl, g6sSfl, g7sSfl, g8sSfl;
+Sfl g9sSfl, g10sSfl, g11sSfl, g12sSfl;
+Sfl g13sSfl, g14sSfl, g15sSfl, g16sSfl;
+extern void initSfl(Sfl *p, double x);
+extern void checkgSfl(void);
+extern void testSfl(Sfl s1, Sfl s2, Sfl s3, Sfl s4, Sfl s5, Sfl s6, Sfl s7, Sfl s8, Sfl s9, Sfl s10, Sfl s11, Sfl s12, Sfl s13, Sfl s14, Sfl s15, Sfl s16);
+extern void testvaSfl(int n, ...);
+void test2_Sfl(Sfl s1, Sfl s2, Sfl s3, Sfl s4, Sfl s5, Sfl s6, Sfl s7, Sfl s8) { testSfl(s1, g2sSfl, s2, g4sSfl, s3, g6sSfl, s4, g8sSfl, s5, g10sSfl, s6, g12sSfl, s7, g14sSfl, s8, g16sSfl); }
+void testitSfl(void)
+{
+    ;
+    ;
+    initSfl(&g1sSfl, (double)1);
+    initSfl(&g2sSfl, (double)2);
+    initSfl(&g3sSfl, (double)3);
+    initSfl(&g4sSfl, (double)4);
+    initSfl(&g5sSfl, (double)5);
+    initSfl(&g6sSfl, (double)6);
+    initSfl(&g7sSfl, (double)7);
+    initSfl(&g8sSfl, (double)8);
+    initSfl(&g9sSfl, (double)9);
+    initSfl(&g10sSfl, (double)10);
+    initSfl(&g11sSfl, (double)11);
+    initSfl(&g12sSfl, (double)12);
+    initSfl(&g13sSfl, (double)13);
+    initSfl(&g14sSfl, (double)14);
+    initSfl(&g15sSfl, (double)15);
+    initSfl(&g16sSfl, (double)16);
+    checkgSfl();
+    ;
+    ;
+    ;
+    testSfl(g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl, g8sSfl, g9sSfl, g10sSfl, g11sSfl, g12sSfl, g13sSfl, g14sSfl, g15sSfl, g16sSfl);
+    ;
+    ;
+    ;
+    ;
+    testvaSfl(1, g1sSfl);
+    ;
+    testvaSfl(2, g1sSfl, g2sSfl);
+    ;
+    testvaSfl(3, g1sSfl, g2sSfl, g3sSfl);
+    ;
+    testvaSfl(4, g1sSfl, g2sSfl, g3sSfl, g4sSfl);
+    ;
+    testvaSfl(5, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl);
+    ;
+    testvaSfl(6, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl);
+    ;
+    testvaSfl(7, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl);
+    ;
+    testvaSfl(8, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl, g8sSfl);
+    ;
+    testvaSfl(9, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl, g8sSfl, g9sSfl);
+    ;
+    testvaSfl(10, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl, g8sSfl, g9sSfl, g10sSfl);
+    ;
+    testvaSfl(11, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl, g8sSfl, g9sSfl, g10sSfl, g11sSfl);
+    ;
+    testvaSfl(12, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl, g8sSfl, g9sSfl, g10sSfl, g11sSfl, g12sSfl);
+    ;
+    testvaSfl(13, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl, g8sSfl, g9sSfl, g10sSfl, g11sSfl, g12sSfl, g13sSfl);
+    ;
+    testvaSfl(14, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl, g8sSfl, g9sSfl, g10sSfl, g11sSfl, g12sSfl, g13sSfl, g14sSfl);
+    ;
+    testvaSfl(15, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl, g8sSfl, g9sSfl, g10sSfl, g11sSfl, g12sSfl, g13sSfl, g14sSfl, g15sSfl);
+    ;
+    testvaSfl(16, g1sSfl, g2sSfl, g3sSfl, g4sSfl, g5sSfl, g6sSfl, g7sSfl, g8sSfl, g9sSfl, g10sSfl, g11sSfl, g12sSfl, g13sSfl, g14sSfl, g15sSfl, g16sSfl);
+    ;
+    ;
+    ;
+    test2_Sfl(g1sSfl, g3sSfl, g5sSfl, g7sSfl, g9sSfl, g11sSfl, g13sSfl, g15sSfl);
+    ;
+}
+Sdf g1sSdf, g2sSdf, g3sSdf, g4sSdf;
+Sdf g5sSdf, g6sSdf, g7sSdf, g8sSdf;
+Sdf g9sSdf, g10sSdf, g11sSdf, g12sSdf;
+Sdf g13sSdf, g14sSdf, g15sSdf, g16sSdf;
+extern void initSdf(Sdf *p, double x);
+extern void checkgSdf(void);
+extern void testSdf(Sdf s1, Sdf s2, Sdf s3, Sdf s4, Sdf s5, Sdf s6, Sdf s7, Sdf s8, Sdf s9, Sdf s10, Sdf s11, Sdf s12, Sdf s13, Sdf s14, Sdf s15, Sdf s16);
+extern void testvaSdf(int n, ...);
+void test2_Sdf(Sdf s1, Sdf s2, Sdf s3, Sdf s4, Sdf s5, Sdf s6, Sdf s7, Sdf s8) { testSdf(s1, g2sSdf, s2, g4sSdf, s3, g6sSdf, s4, g8sSdf, s5, g10sSdf, s6, g12sSdf, s7, g14sSdf, s8, g16sSdf); }
+void testitSdf(void)
+{
+    ;
+    ;
+    initSdf(&g1sSdf, (double)1);
+    initSdf(&g2sSdf, (double)2);
+    initSdf(&g3sSdf, (double)3);
+    initSdf(&g4sSdf, (double)4);
+    initSdf(&g5sSdf, (double)5);
+    initSdf(&g6sSdf, (double)6);
+    initSdf(&g7sSdf, (double)7);
+    initSdf(&g8sSdf, (double)8);
+    initSdf(&g9sSdf, (double)9);
+    initSdf(&g10sSdf, (double)10);
+    initSdf(&g11sSdf, (double)11);
+    initSdf(&g12sSdf, (double)12);
+    initSdf(&g13sSdf, (double)13);
+    initSdf(&g14sSdf, (double)14);
+    initSdf(&g15sSdf, (double)15);
+    initSdf(&g16sSdf, (double)16);
+    checkgSdf();
+    ;
+    ;
+    ;
+    testSdf(g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf, g8sSdf, g9sSdf, g10sSdf, g11sSdf, g12sSdf, g13sSdf, g14sSdf, g15sSdf, g16sSdf);
+    ;
+    ;
+    ;
+    ;
+    testvaSdf(1, g1sSdf);
+    ;
+    testvaSdf(2, g1sSdf, g2sSdf);
+    ;
+    testvaSdf(3, g1sSdf, g2sSdf, g3sSdf);
+    ;
+    testvaSdf(4, g1sSdf, g2sSdf, g3sSdf, g4sSdf);
+    ;
+    testvaSdf(5, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf);
+    ;
+    testvaSdf(6, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf);
+    ;
+    testvaSdf(7, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf);
+    ;
+    testvaSdf(8, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf, g8sSdf);
+    ;
+    testvaSdf(9, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf, g8sSdf, g9sSdf);
+    ;
+    testvaSdf(10, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf, g8sSdf, g9sSdf, g10sSdf);
+    ;
+    testvaSdf(11, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf, g8sSdf, g9sSdf, g10sSdf, g11sSdf);
+    ;
+    testvaSdf(12, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf, g8sSdf, g9sSdf, g10sSdf, g11sSdf, g12sSdf);
+    ;
+    testvaSdf(13, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf, g8sSdf, g9sSdf, g10sSdf, g11sSdf, g12sSdf, g13sSdf);
+    ;
+    testvaSdf(14, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf, g8sSdf, g9sSdf, g10sSdf, g11sSdf, g12sSdf, g13sSdf, g14sSdf);
+    ;
+    testvaSdf(15, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf, g8sSdf, g9sSdf, g10sSdf, g11sSdf, g12sSdf, g13sSdf, g14sSdf, g15sSdf);
+    ;
+    testvaSdf(16, g1sSdf, g2sSdf, g3sSdf, g4sSdf, g5sSdf, g6sSdf, g7sSdf, g8sSdf, g9sSdf, g10sSdf, g11sSdf, g12sSdf, g13sSdf, g14sSdf, g15sSdf, g16sSdf);
+    ;
+    ;
+    ;
+    test2_Sdf(g1sSdf, g3sSdf, g5sSdf, g7sSdf, g9sSdf, g11sSdf, g13sSdf, g15sSdf);
+    ;
+}
+Sdl g1sSdl, g2sSdl, g3sSdl, g4sSdl;
+Sdl g5sSdl, g6sSdl, g7sSdl, g8sSdl;
+Sdl g9sSdl, g10sSdl, g11sSdl, g12sSdl;
+Sdl g13sSdl, g14sSdl, g15sSdl, g16sSdl;
+extern void initSdl(Sdl *p, double x);
+extern void checkgSdl(void);
+extern void testSdl(Sdl s1, Sdl s2, Sdl s3, Sdl s4, Sdl s5, Sdl s6, Sdl s7, Sdl s8, Sdl s9, Sdl s10, Sdl s11, Sdl s12, Sdl s13, Sdl s14, Sdl s15, Sdl s16);
+extern void testvaSdl(int n, ...);
+void test2_Sdl(Sdl s1, Sdl s2, Sdl s3, Sdl s4, Sdl s5, Sdl s6, Sdl s7, Sdl s8) { testSdl(s1, g2sSdl, s2, g4sSdl, s3, g6sSdl, s4, g8sSdl, s5, g10sSdl, s6, g12sSdl, s7, g14sSdl, s8, g16sSdl); }
+void testitSdl(void)
+{
+    ;
+    ;
+    initSdl(&g1sSdl, (double)1);
+    initSdl(&g2sSdl, (double)2);
+    initSdl(&g3sSdl, (double)3);
+    initSdl(&g4sSdl, (double)4);
+    initSdl(&g5sSdl, (double)5);
+    initSdl(&g6sSdl, (double)6);
+    initSdl(&g7sSdl, (double)7);
+    initSdl(&g8sSdl, (double)8);
+    initSdl(&g9sSdl, (double)9);
+    initSdl(&g10sSdl, (double)10);
+    initSdl(&g11sSdl, (double)11);
+    initSdl(&g12sSdl, (double)12);
+    initSdl(&g13sSdl, (double)13);
+    initSdl(&g14sSdl, (double)14);
+    initSdl(&g15sSdl, (double)15);
+    initSdl(&g16sSdl, (double)16);
+    checkgSdl();
+    ;
+    ;
+    ;
+    testSdl(g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl, g8sSdl, g9sSdl, g10sSdl, g11sSdl, g12sSdl, g13sSdl, g14sSdl, g15sSdl, g16sSdl);
+    ;
+    ;
+    ;
+    ;
+    testvaSdl(1, g1sSdl);
+    ;
+    testvaSdl(2, g1sSdl, g2sSdl);
+    ;
+    testvaSdl(3, g1sSdl, g2sSdl, g3sSdl);
+    ;
+    testvaSdl(4, g1sSdl, g2sSdl, g3sSdl, g4sSdl);
+    ;
+    testvaSdl(5, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl);
+    ;
+    testvaSdl(6, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl);
+    ;
+    testvaSdl(7, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl);
+    ;
+    testvaSdl(8, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl, g8sSdl);
+    ;
+    testvaSdl(9, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl, g8sSdl, g9sSdl);
+    ;
+    testvaSdl(10, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl, g8sSdl, g9sSdl, g10sSdl);
+    ;
+    testvaSdl(11, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl, g8sSdl, g9sSdl, g10sSdl, g11sSdl);
+    ;
+    testvaSdl(12, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl, g8sSdl, g9sSdl, g10sSdl, g11sSdl, g12sSdl);
+    ;
+    testvaSdl(13, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl, g8sSdl, g9sSdl, g10sSdl, g11sSdl, g12sSdl, g13sSdl);
+    ;
+    testvaSdl(14, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl, g8sSdl, g9sSdl, g10sSdl, g11sSdl, g12sSdl, g13sSdl, g14sSdl);
+    ;
+    testvaSdl(15, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl, g8sSdl, g9sSdl, g10sSdl, g11sSdl, g12sSdl, g13sSdl, g14sSdl, g15sSdl);
+    ;
+    testvaSdl(16, g1sSdl, g2sSdl, g3sSdl, g4sSdl, g5sSdl, g6sSdl, g7sSdl, g8sSdl, g9sSdl, g10sSdl, g11sSdl, g12sSdl, g13sSdl, g14sSdl, g15sSdl, g16sSdl);
+    ;
+    ;
+    ;
+    test2_Sdl(g1sSdl, g3sSdl, g5sSdl, g7sSdl, g9sSdl, g11sSdl, g13sSdl, g15sSdl);
+    ;
+}
+Slf g1sSlf, g2sSlf, g3sSlf, g4sSlf;
+Slf g5sSlf, g6sSlf, g7sSlf, g8sSlf;
+Slf g9sSlf, g10sSlf, g11sSlf, g12sSlf;
+Slf g13sSlf, g14sSlf, g15sSlf, g16sSlf;
+extern void initSlf(Slf *p, double x);
+extern void checkgSlf(void);
+extern void testSlf(Slf s1, Slf s2, Slf s3, Slf s4, Slf s5, Slf s6, Slf s7, Slf s8, Slf s9, Slf s10, Slf s11, Slf s12, Slf s13, Slf s14, Slf s15, Slf s16);
+extern void testvaSlf(int n, ...);
+void test2_Slf(Slf s1, Slf s2, Slf s3, Slf s4, Slf s5, Slf s6, Slf s7, Slf s8) { testSlf(s1, g2sSlf, s2, g4sSlf, s3, g6sSlf, s4, g8sSlf, s5, g10sSlf, s6, g12sSlf, s7, g14sSlf, s8, g16sSlf); }
+void testitSlf(void)
+{
+    ;
+    ;
+    initSlf(&g1sSlf, (double)1);
+    initSlf(&g2sSlf, (double)2);
+    initSlf(&g3sSlf, (double)3);
+    initSlf(&g4sSlf, (double)4);
+    initSlf(&g5sSlf, (double)5);
+    initSlf(&g6sSlf, (double)6);
+    initSlf(&g7sSlf, (double)7);
+    initSlf(&g8sSlf, (double)8);
+    initSlf(&g9sSlf, (double)9);
+    initSlf(&g10sSlf, (double)10);
+    initSlf(&g11sSlf, (double)11);
+    initSlf(&g12sSlf, (double)12);
+    initSlf(&g13sSlf, (double)13);
+    initSlf(&g14sSlf, (double)14);
+    initSlf(&g15sSlf, (double)15);
+    initSlf(&g16sSlf, (double)16);
+    checkgSlf();
+    ;
+    ;
+    ;
+    testSlf(g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf, g8sSlf, g9sSlf, g10sSlf, g11sSlf, g12sSlf, g13sSlf, g14sSlf, g15sSlf, g16sSlf);
+    ;
+    ;
+    ;
+    ;
+    testvaSlf(1, g1sSlf);
+    ;
+    testvaSlf(2, g1sSlf, g2sSlf);
+    ;
+    testvaSlf(3, g1sSlf, g2sSlf, g3sSlf);
+    ;
+    testvaSlf(4, g1sSlf, g2sSlf, g3sSlf, g4sSlf);
+    ;
+    testvaSlf(5, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf);
+    ;
+    testvaSlf(6, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf);
+    ;
+    testvaSlf(7, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf);
+    ;
+    testvaSlf(8, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf, g8sSlf);
+    ;
+    testvaSlf(9, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf, g8sSlf, g9sSlf);
+    ;
+    testvaSlf(10, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf, g8sSlf, g9sSlf, g10sSlf);
+    ;
+    testvaSlf(11, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf, g8sSlf, g9sSlf, g10sSlf, g11sSlf);
+    ;
+    testvaSlf(12, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf, g8sSlf, g9sSlf, g10sSlf, g11sSlf, g12sSlf);
+    ;
+    testvaSlf(13, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf, g8sSlf, g9sSlf, g10sSlf, g11sSlf, g12sSlf, g13sSlf);
+    ;
+    testvaSlf(14, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf, g8sSlf, g9sSlf, g10sSlf, g11sSlf, g12sSlf, g13sSlf, g14sSlf);
+    ;
+    testvaSlf(15, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf, g8sSlf, g9sSlf, g10sSlf, g11sSlf, g12sSlf, g13sSlf, g14sSlf, g15sSlf);
+    ;
+    testvaSlf(16, g1sSlf, g2sSlf, g3sSlf, g4sSlf, g5sSlf, g6sSlf, g7sSlf, g8sSlf, g9sSlf, g10sSlf, g11sSlf, g12sSlf, g13sSlf, g14sSlf, g15sSlf, g16sSlf);
+    ;
+    ;
+    ;
+    test2_Slf(g1sSlf, g3sSlf, g5sSlf, g7sSlf, g9sSlf, g11sSlf, g13sSlf, g15sSlf);
+    ;
+}
+Sld g1sSld, g2sSld, g3sSld, g4sSld;
+Sld g5sSld, g6sSld, g7sSld, g8sSld;
+Sld g9sSld, g10sSld, g11sSld, g12sSld;
+Sld g13sSld, g14sSld, g15sSld, g16sSld;
+extern void initSld(Sld *p, double x);
+extern void checkgSld(void);
+extern void testSld(Sld s1, Sld s2, Sld s3, Sld s4, Sld s5, Sld s6, Sld s7, Sld s8, Sld s9, Sld s10, Sld s11, Sld s12, Sld s13, Sld s14, Sld s15, Sld s16);
+extern void testvaSld(int n, ...);
+void test2_Sld(Sld s1, Sld s2, Sld s3, Sld s4, Sld s5, Sld s6, Sld s7, Sld s8) { testSld(s1, g2sSld, s2, g4sSld, s3, g6sSld, s4, g8sSld, s5, g10sSld, s6, g12sSld, s7, g14sSld, s8, g16sSld); }
+void testitSld(void)
+{
+    ;
+    ;
+    initSld(&g1sSld, (double)1);
+    initSld(&g2sSld, (double)2);
+    initSld(&g3sSld, (double)3);
+    initSld(&g4sSld, (double)4);
+    initSld(&g5sSld, (double)5);
+    initSld(&g6sSld, (double)6);
+    initSld(&g7sSld, (double)7);
+    initSld(&g8sSld, (double)8);
+    initSld(&g9sSld, (double)9);
+    initSld(&g10sSld, (double)10);
+    initSld(&g11sSld, (double)11);
+    initSld(&g12sSld, (double)12);
+    initSld(&g13sSld, (double)13);
+    initSld(&g14sSld, (double)14);
+    initSld(&g15sSld, (double)15);
+    initSld(&g16sSld, (double)16);
+    checkgSld();
+    ;
+    ;
+    ;
+    testSld(g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld, g8sSld, g9sSld, g10sSld, g11sSld, g12sSld, g13sSld, g14sSld, g15sSld, g16sSld);
+    ;
+    ;
+    ;
+    ;
+    testvaSld(1, g1sSld);
+    ;
+    testvaSld(2, g1sSld, g2sSld);
+    ;
+    testvaSld(3, g1sSld, g2sSld, g3sSld);
+    ;
+    testvaSld(4, g1sSld, g2sSld, g3sSld, g4sSld);
+    ;
+    testvaSld(5, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld);
+    ;
+    testvaSld(6, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld);
+    ;
+    testvaSld(7, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld);
+    ;
+    testvaSld(8, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld, g8sSld);
+    ;
+    testvaSld(9, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld, g8sSld, g9sSld);
+    ;
+    testvaSld(10, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld, g8sSld, g9sSld, g10sSld);
+    ;
+    testvaSld(11, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld, g8sSld, g9sSld, g10sSld, g11sSld);
+    ;
+    testvaSld(12, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld, g8sSld, g9sSld, g10sSld, g11sSld, g12sSld);
+    ;
+    testvaSld(13, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld, g8sSld, g9sSld, g10sSld, g11sSld, g12sSld, g13sSld);
+    ;
+    testvaSld(14, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld, g8sSld, g9sSld, g10sSld, g11sSld, g12sSld, g13sSld, g14sSld);
+    ;
+    testvaSld(15, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld, g8sSld, g9sSld, g10sSld, g11sSld, g12sSld, g13sSld, g14sSld, g15sSld);
+    ;
+    testvaSld(16, g1sSld, g2sSld, g3sSld, g4sSld, g5sSld, g6sSld, g7sSld, g8sSld, g9sSld, g10sSld, g11sSld, g12sSld, g13sSld, g14sSld, g15sSld, g16sSld);
+    ;
+    ;
+    ;
+    test2_Sld(g1sSld, g3sSld, g5sSld, g7sSld, g9sSld, g11sSld, g13sSld, g15sSld);
+    ;
+}
+Sfdl g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl;
+Sfdl g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl;
+Sfdl g9sSfdl, g10sSfdl, g11sSfdl, g12sSfdl;
+Sfdl g13sSfdl, g14sSfdl, g15sSfdl, g16sSfdl;
+extern void initSfdl(Sfdl *p, double x);
+extern void checkgSfdl(void);
+extern void testSfdl(Sfdl s1, Sfdl s2, Sfdl s3, Sfdl s4, Sfdl s5, Sfdl s6, Sfdl s7, Sfdl s8, Sfdl s9, Sfdl s10, Sfdl s11, Sfdl s12, Sfdl s13, Sfdl s14, Sfdl s15, Sfdl s16);
+extern void testvaSfdl(int n, ...);
+void test2_Sfdl(Sfdl s1, Sfdl s2, Sfdl s3, Sfdl s4, Sfdl s5, Sfdl s6, Sfdl s7, Sfdl s8) { testSfdl(s1, g2sSfdl, s2, g4sSfdl, s3, g6sSfdl, s4, g8sSfdl, s5, g10sSfdl, s6, g12sSfdl, s7, g14sSfdl, s8, g16sSfdl); }
+void testitSfdl(void)
+{
+    ;
+    ;
+    initSfdl(&g1sSfdl, (double)1);
+    initSfdl(&g2sSfdl, (double)2);
+    initSfdl(&g3sSfdl, (double)3);
+    initSfdl(&g4sSfdl, (double)4);
+    initSfdl(&g5sSfdl, (double)5);
+    initSfdl(&g6sSfdl, (double)6);
+    initSfdl(&g7sSfdl, (double)7);
+    initSfdl(&g8sSfdl, (double)8);
+    initSfdl(&g9sSfdl, (double)9);
+    initSfdl(&g10sSfdl, (double)10);
+    initSfdl(&g11sSfdl, (double)11);
+    initSfdl(&g12sSfdl, (double)12);
+    initSfdl(&g13sSfdl, (double)13);
+    initSfdl(&g14sSfdl, (double)14);
+    initSfdl(&g15sSfdl, (double)15);
+    initSfdl(&g16sSfdl, (double)16);
+    checkgSfdl();
+    ;
+    ;
+    ;
+    testSfdl(g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl, g9sSfdl, g10sSfdl, g11sSfdl, g12sSfdl, g13sSfdl, g14sSfdl, g15sSfdl, g16sSfdl);
+    ;
+    ;
+    ;
+    ;
+    testvaSfdl(1, g1sSfdl);
+    ;
+    testvaSfdl(2, g1sSfdl, g2sSfdl);
+    ;
+    testvaSfdl(3, g1sSfdl, g2sSfdl, g3sSfdl);
+    ;
+    testvaSfdl(4, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl);
+    ;
+    testvaSfdl(5, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl);
+    ;
+    testvaSfdl(6, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl);
+    ;
+    testvaSfdl(7, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl);
+    ;
+    testvaSfdl(8, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl);
+    ;
+    testvaSfdl(9, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl, g9sSfdl);
+    ;
+    testvaSfdl(10, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl, g9sSfdl, g10sSfdl);
+    ;
+    testvaSfdl(11, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl, g9sSfdl, g10sSfdl, g11sSfdl);
+    ;
+    testvaSfdl(12, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl, g9sSfdl, g10sSfdl, g11sSfdl, g12sSfdl);
+    ;
+    testvaSfdl(13, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl, g9sSfdl, g10sSfdl, g11sSfdl, g12sSfdl, g13sSfdl);
+    ;
+    testvaSfdl(14, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl, g9sSfdl, g10sSfdl, g11sSfdl, g12sSfdl, g13sSfdl, g14sSfdl);
+    ;
+    testvaSfdl(15, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl, g9sSfdl, g10sSfdl, g11sSfdl, g12sSfdl, g13sSfdl, g14sSfdl, g15sSfdl);
+    ;
+    testvaSfdl(16, g1sSfdl, g2sSfdl, g3sSfdl, g4sSfdl, g5sSfdl, g6sSfdl, g7sSfdl, g8sSfdl, g9sSfdl, g10sSfdl, g11sSfdl, g12sSfdl, g13sSfdl, g14sSfdl, g15sSfdl, g16sSfdl);
+    ;
+    ;
+    ;
+    test2_Sfdl(g1sSfdl, g3sSfdl, g5sSfdl, g7sSfdl, g9sSfdl, g11sSfdl, g13sSfdl, g15sSfdl);
+    ;
+}
+Sfld g1sSfld, g2sSfld, g3sSfld, g4sSfld;
+Sfld g5sSfld, g6sSfld, g7sSfld, g8sSfld;
+Sfld g9sSfld, g10sSfld, g11sSfld, g12sSfld;
+Sfld g13sSfld, g14sSfld, g15sSfld, g16sSfld;
+extern void initSfld(Sfld *p, double x);
+extern void checkgSfld(void);
+extern void testSfld(Sfld s1, Sfld s2, Sfld s3, Sfld s4, Sfld s5, Sfld s6, Sfld s7, Sfld s8, Sfld s9, Sfld s10, Sfld s11, Sfld s12, Sfld s13, Sfld s14, Sfld s15, Sfld s16);
+extern void testvaSfld(int n, ...);
+void test2_Sfld(Sfld s1, Sfld s2, Sfld s3, Sfld s4, Sfld s5, Sfld s6, Sfld s7, Sfld s8) { testSfld(s1, g2sSfld, s2, g4sSfld, s3, g6sSfld, s4, g8sSfld, s5, g10sSfld, s6, g12sSfld, s7, g14sSfld, s8, g16sSfld); }
+void testitSfld(void)
+{
+    ;
+    ;
+    initSfld(&g1sSfld, (double)1);
+    initSfld(&g2sSfld, (double)2);
+    initSfld(&g3sSfld, (double)3);
+    initSfld(&g4sSfld, (double)4);
+    initSfld(&g5sSfld, (double)5);
+    initSfld(&g6sSfld, (double)6);
+    initSfld(&g7sSfld, (double)7);
+    initSfld(&g8sSfld, (double)8);
+    initSfld(&g9sSfld, (double)9);
+    initSfld(&g10sSfld, (double)10);
+    initSfld(&g11sSfld, (double)11);
+    initSfld(&g12sSfld, (double)12);
+    initSfld(&g13sSfld, (double)13);
+    initSfld(&g14sSfld, (double)14);
+    initSfld(&g15sSfld, (double)15);
+    initSfld(&g16sSfld, (double)16);
+    checkgSfld();
+    ;
+    ;
+    ;
+    testSfld(g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld, g8sSfld, g9sSfld, g10sSfld, g11sSfld, g12sSfld, g13sSfld, g14sSfld, g15sSfld, g16sSfld);
+    ;
+    ;
+    ;
+    ;
+    testvaSfld(1, g1sSfld);
+    ;
+    testvaSfld(2, g1sSfld, g2sSfld);
+    ;
+    testvaSfld(3, g1sSfld, g2sSfld, g3sSfld);
+    ;
+    testvaSfld(4, g1sSfld, g2sSfld, g3sSfld, g4sSfld);
+    ;
+    testvaSfld(5, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld);
+    ;
+    testvaSfld(6, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld);
+    ;
+    testvaSfld(7, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld);
+    ;
+    testvaSfld(8, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld, g8sSfld);
+    ;
+    testvaSfld(9, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld, g8sSfld, g9sSfld);
+    ;
+    testvaSfld(10, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld, g8sSfld, g9sSfld, g10sSfld);
+    ;
+    testvaSfld(11, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld, g8sSfld, g9sSfld, g10sSfld, g11sSfld);
+    ;
+    testvaSfld(12, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld, g8sSfld, g9sSfld, g10sSfld, g11sSfld, g12sSfld);
+    ;
+    testvaSfld(13, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld, g8sSfld, g9sSfld, g10sSfld, g11sSfld, g12sSfld, g13sSfld);
+    ;
+    testvaSfld(14, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld, g8sSfld, g9sSfld, g10sSfld, g11sSfld, g12sSfld, g13sSfld, g14sSfld);
+    ;
+    testvaSfld(15, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld, g8sSfld, g9sSfld, g10sSfld, g11sSfld, g12sSfld, g13sSfld, g14sSfld, g15sSfld);
+    ;
+    testvaSfld(16, g1sSfld, g2sSfld, g3sSfld, g4sSfld, g5sSfld, g6sSfld, g7sSfld, g8sSfld, g9sSfld, g10sSfld, g11sSfld, g12sSfld, g13sSfld, g14sSfld, g15sSfld, g16sSfld);
+    ;
+    ;
+    ;
+    test2_Sfld(g1sSfld, g3sSfld, g5sSfld, g7sSfld, g9sSfld, g11sSfld, g13sSfld, g15sSfld);
+    ;
+}
+Sdfl g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl;
+Sdfl g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl;
+Sdfl g9sSdfl, g10sSdfl, g11sSdfl, g12sSdfl;
+Sdfl g13sSdfl, g14sSdfl, g15sSdfl, g16sSdfl;
+extern void initSdfl(Sdfl *p, double x);
+extern void checkgSdfl(void);
+extern void testSdfl(Sdfl s1, Sdfl s2, Sdfl s3, Sdfl s4, Sdfl s5, Sdfl s6, Sdfl s7, Sdfl s8, Sdfl s9, Sdfl s10, Sdfl s11, Sdfl s12, Sdfl s13, Sdfl s14, Sdfl s15, Sdfl s16);
+extern void testvaSdfl(int n, ...);
+void test2_Sdfl(Sdfl s1, Sdfl s2, Sdfl s3, Sdfl s4, Sdfl s5, Sdfl s6, Sdfl s7, Sdfl s8) { testSdfl(s1, g2sSdfl, s2, g4sSdfl, s3, g6sSdfl, s4, g8sSdfl, s5, g10sSdfl, s6, g12sSdfl, s7, g14sSdfl, s8, g16sSdfl); }
+void testitSdfl(void)
+{
+    ;
+    ;
+    initSdfl(&g1sSdfl, (double)1);
+    initSdfl(&g2sSdfl, (double)2);
+    initSdfl(&g3sSdfl, (double)3);
+    initSdfl(&g4sSdfl, (double)4);
+    initSdfl(&g5sSdfl, (double)5);
+    initSdfl(&g6sSdfl, (double)6);
+    initSdfl(&g7sSdfl, (double)7);
+    initSdfl(&g8sSdfl, (double)8);
+    initSdfl(&g9sSdfl, (double)9);
+    initSdfl(&g10sSdfl, (double)10);
+    initSdfl(&g11sSdfl, (double)11);
+    initSdfl(&g12sSdfl, (double)12);
+    initSdfl(&g13sSdfl, (double)13);
+    initSdfl(&g14sSdfl, (double)14);
+    initSdfl(&g15sSdfl, (double)15);
+    initSdfl(&g16sSdfl, (double)16);
+    checkgSdfl();
+    ;
+    ;
+    ;
+    testSdfl(g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl, g9sSdfl, g10sSdfl, g11sSdfl, g12sSdfl, g13sSdfl, g14sSdfl, g15sSdfl, g16sSdfl);
+    ;
+    ;
+    ;
+    ;
+    testvaSdfl(1, g1sSdfl);
+    ;
+    testvaSdfl(2, g1sSdfl, g2sSdfl);
+    ;
+    testvaSdfl(3, g1sSdfl, g2sSdfl, g3sSdfl);
+    ;
+    testvaSdfl(4, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl);
+    ;
+    testvaSdfl(5, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl);
+    ;
+    testvaSdfl(6, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl);
+    ;
+    testvaSdfl(7, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl);
+    ;
+    testvaSdfl(8, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl);
+    ;
+    testvaSdfl(9, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl, g9sSdfl);
+    ;
+    testvaSdfl(10, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl, g9sSdfl, g10sSdfl);
+    ;
+    testvaSdfl(11, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl, g9sSdfl, g10sSdfl, g11sSdfl);
+    ;
+    testvaSdfl(12, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl, g9sSdfl, g10sSdfl, g11sSdfl, g12sSdfl);
+    ;
+    testvaSdfl(13, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl, g9sSdfl, g10sSdfl, g11sSdfl, g12sSdfl, g13sSdfl);
+    ;
+    testvaSdfl(14, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl, g9sSdfl, g10sSdfl, g11sSdfl, g12sSdfl, g13sSdfl, g14sSdfl);
+    ;
+    testvaSdfl(15, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl, g9sSdfl, g10sSdfl, g11sSdfl, g12sSdfl, g13sSdfl, g14sSdfl, g15sSdfl);
+    ;
+    testvaSdfl(16, g1sSdfl, g2sSdfl, g3sSdfl, g4sSdfl, g5sSdfl, g6sSdfl, g7sSdfl, g8sSdfl, g9sSdfl, g10sSdfl, g11sSdfl, g12sSdfl, g13sSdfl, g14sSdfl, g15sSdfl, g16sSdfl);
+    ;
+    ;
+    ;
+    test2_Sdfl(g1sSdfl, g3sSdfl, g5sSdfl, g7sSdfl, g9sSdfl, g11sSdfl, g13sSdfl, g15sSdfl);
+    ;
+}
+Sdlf g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf;
+Sdlf g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf;
+Sdlf g9sSdlf, g10sSdlf, g11sSdlf, g12sSdlf;
+Sdlf g13sSdlf, g14sSdlf, g15sSdlf, g16sSdlf;
+extern void initSdlf(Sdlf *p, double x);
+extern void checkgSdlf(void);
+extern void testSdlf(Sdlf s1, Sdlf s2, Sdlf s3, Sdlf s4, Sdlf s5, Sdlf s6, Sdlf s7, Sdlf s8, Sdlf s9, Sdlf s10, Sdlf s11, Sdlf s12, Sdlf s13, Sdlf s14, Sdlf s15, Sdlf s16);
+extern void testvaSdlf(int n, ...);
+void test2_Sdlf(Sdlf s1, Sdlf s2, Sdlf s3, Sdlf s4, Sdlf s5, Sdlf s6, Sdlf s7, Sdlf s8) { testSdlf(s1, g2sSdlf, s2, g4sSdlf, s3, g6sSdlf, s4, g8sSdlf, s5, g10sSdlf, s6, g12sSdlf, s7, g14sSdlf, s8, g16sSdlf); }
+void testitSdlf(void)
+{
+    ;
+    ;
+    initSdlf(&g1sSdlf, (double)1);
+    initSdlf(&g2sSdlf, (double)2);
+    initSdlf(&g3sSdlf, (double)3);
+    initSdlf(&g4sSdlf, (double)4);
+    initSdlf(&g5sSdlf, (double)5);
+    initSdlf(&g6sSdlf, (double)6);
+    initSdlf(&g7sSdlf, (double)7);
+    initSdlf(&g8sSdlf, (double)8);
+    initSdlf(&g9sSdlf, (double)9);
+    initSdlf(&g10sSdlf, (double)10);
+    initSdlf(&g11sSdlf, (double)11);
+    initSdlf(&g12sSdlf, (double)12);
+    initSdlf(&g13sSdlf, (double)13);
+    initSdlf(&g14sSdlf, (double)14);
+    initSdlf(&g15sSdlf, (double)15);
+    initSdlf(&g16sSdlf, (double)16);
+    checkgSdlf();
+    ;
+    ;
+    ;
+    testSdlf(g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf, g9sSdlf, g10sSdlf, g11sSdlf, g12sSdlf, g13sSdlf, g14sSdlf, g15sSdlf, g16sSdlf);
+    ;
+    ;
+    ;
+    ;
+    testvaSdlf(1, g1sSdlf);
+    ;
+    testvaSdlf(2, g1sSdlf, g2sSdlf);
+    ;
+    testvaSdlf(3, g1sSdlf, g2sSdlf, g3sSdlf);
+    ;
+    testvaSdlf(4, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf);
+    ;
+    testvaSdlf(5, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf);
+    ;
+    testvaSdlf(6, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf);
+    ;
+    testvaSdlf(7, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf);
+    ;
+    testvaSdlf(8, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf);
+    ;
+    testvaSdlf(9, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf, g9sSdlf);
+    ;
+    testvaSdlf(10, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf, g9sSdlf, g10sSdlf);
+    ;
+    testvaSdlf(11, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf, g9sSdlf, g10sSdlf, g11sSdlf);
+    ;
+    testvaSdlf(12, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf, g9sSdlf, g10sSdlf, g11sSdlf, g12sSdlf);
+    ;
+    testvaSdlf(13, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf, g9sSdlf, g10sSdlf, g11sSdlf, g12sSdlf, g13sSdlf);
+    ;
+    testvaSdlf(14, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf, g9sSdlf, g10sSdlf, g11sSdlf, g12sSdlf, g13sSdlf, g14sSdlf);
+    ;
+    testvaSdlf(15, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf, g9sSdlf, g10sSdlf, g11sSdlf, g12sSdlf, g13sSdlf, g14sSdlf, g15sSdlf);
+    ;
+    testvaSdlf(16, g1sSdlf, g2sSdlf, g3sSdlf, g4sSdlf, g5sSdlf, g6sSdlf, g7sSdlf, g8sSdlf, g9sSdlf, g10sSdlf, g11sSdlf, g12sSdlf, g13sSdlf, g14sSdlf, g15sSdlf, g16sSdlf);
+    ;
+    ;
+    ;
+    test2_Sdlf(g1sSdlf, g3sSdlf, g5sSdlf, g7sSdlf, g9sSdlf, g11sSdlf, g13sSdlf, g15sSdlf);
+    ;
+}
+Slfd g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd;
+Slfd g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd;
+Slfd g9sSlfd, g10sSlfd, g11sSlfd, g12sSlfd;
+Slfd g13sSlfd, g14sSlfd, g15sSlfd, g16sSlfd;
+extern void initSlfd(Slfd *p, double x);
+extern void checkgSlfd(void);
+extern void testSlfd(Slfd s1, Slfd s2, Slfd s3, Slfd s4, Slfd s5, Slfd s6, Slfd s7, Slfd s8, Slfd s9, Slfd s10, Slfd s11, Slfd s12, Slfd s13, Slfd s14, Slfd s15, Slfd s16);
+extern void testvaSlfd(int n, ...);
+void test2_Slfd(Slfd s1, Slfd s2, Slfd s3, Slfd s4, Slfd s5, Slfd s6, Slfd s7, Slfd s8) { testSlfd(s1, g2sSlfd, s2, g4sSlfd, s3, g6sSlfd, s4, g8sSlfd, s5, g10sSlfd, s6, g12sSlfd, s7, g14sSlfd, s8, g16sSlfd); }
+void testitSlfd(void)
+{
+    ;
+    ;
+    initSlfd(&g1sSlfd, (double)1);
+    initSlfd(&g2sSlfd, (double)2);
+    initSlfd(&g3sSlfd, (double)3);
+    initSlfd(&g4sSlfd, (double)4);
+    initSlfd(&g5sSlfd, (double)5);
+    initSlfd(&g6sSlfd, (double)6);
+    initSlfd(&g7sSlfd, (double)7);
+    initSlfd(&g8sSlfd, (double)8);
+    initSlfd(&g9sSlfd, (double)9);
+    initSlfd(&g10sSlfd, (double)10);
+    initSlfd(&g11sSlfd, (double)11);
+    initSlfd(&g12sSlfd, (double)12);
+    initSlfd(&g13sSlfd, (double)13);
+    initSlfd(&g14sSlfd, (double)14);
+    initSlfd(&g15sSlfd, (double)15);
+    initSlfd(&g16sSlfd, (double)16);
+    checkgSlfd();
+    ;
+    ;
+    ;
+    testSlfd(g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd, g9sSlfd, g10sSlfd, g11sSlfd, g12sSlfd, g13sSlfd, g14sSlfd, g15sSlfd, g16sSlfd);
+    ;
+    ;
+    ;
+    ;
+    testvaSlfd(1, g1sSlfd);
+    ;
+    testvaSlfd(2, g1sSlfd, g2sSlfd);
+    ;
+    testvaSlfd(3, g1sSlfd, g2sSlfd, g3sSlfd);
+    ;
+    testvaSlfd(4, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd);
+    ;
+    testvaSlfd(5, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd);
+    ;
+    testvaSlfd(6, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd);
+    ;
+    testvaSlfd(7, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd);
+    ;
+    testvaSlfd(8, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd);
+    ;
+    testvaSlfd(9, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd, g9sSlfd);
+    ;
+    testvaSlfd(10, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd, g9sSlfd, g10sSlfd);
+    ;
+    testvaSlfd(11, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd, g9sSlfd, g10sSlfd, g11sSlfd);
+    ;
+    testvaSlfd(12, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd, g9sSlfd, g10sSlfd, g11sSlfd, g12sSlfd);
+    ;
+    testvaSlfd(13, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd, g9sSlfd, g10sSlfd, g11sSlfd, g12sSlfd, g13sSlfd);
+    ;
+    testvaSlfd(14, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd, g9sSlfd, g10sSlfd, g11sSlfd, g12sSlfd, g13sSlfd, g14sSlfd);
+    ;
+    testvaSlfd(15, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd, g9sSlfd, g10sSlfd, g11sSlfd, g12sSlfd, g13sSlfd, g14sSlfd, g15sSlfd);
+    ;
+    testvaSlfd(16, g1sSlfd, g2sSlfd, g3sSlfd, g4sSlfd, g5sSlfd, g6sSlfd, g7sSlfd, g8sSlfd, g9sSlfd, g10sSlfd, g11sSlfd, g12sSlfd, g13sSlfd, g14sSlfd, g15sSlfd, g16sSlfd);
+    ;
+    ;
+    ;
+    test2_Slfd(g1sSlfd, g3sSlfd, g5sSlfd, g7sSlfd, g9sSlfd, g11sSlfd, g13sSlfd, g15sSlfd);
+    ;
+}
+Sldf g1sSldf, g2sSldf, g3sSldf, g4sSldf;
+Sldf g5sSldf, g6sSldf, g7sSldf, g8sSldf;
+Sldf g9sSldf, g10sSldf, g11sSldf, g12sSldf;
+Sldf g13sSldf, g14sSldf, g15sSldf, g16sSldf;
+extern void initSldf(Sldf *p, double x);
+extern void checkgSldf(void);
+extern void testSldf(Sldf s1, Sldf s2, Sldf s3, Sldf s4, Sldf s5, Sldf s6, Sldf s7, Sldf s8, Sldf s9, Sldf s10, Sldf s11, Sldf s12, Sldf s13, Sldf s14, Sldf s15, Sldf s16);
+extern void testvaSldf(int n, ...);
+void test2_Sldf(Sldf s1, Sldf s2, Sldf s3, Sldf s4, Sldf s5, Sldf s6, Sldf s7, Sldf s8) { testSldf(s1, g2sSldf, s2, g4sSldf, s3, g6sSldf, s4, g8sSldf, s5, g10sSldf, s6, g12sSldf, s7, g14sSldf, s8, g16sSldf); }
+void testitSldf(void)
+{
+    ;
+    ;
+    initSldf(&g1sSldf, (double)1);
+    initSldf(&g2sSldf, (double)2);
+    initSldf(&g3sSldf, (double)3);
+    initSldf(&g4sSldf, (double)4);
+    initSldf(&g5sSldf, (double)5);
+    initSldf(&g6sSldf, (double)6);
+    initSldf(&g7sSldf, (double)7);
+    initSldf(&g8sSldf, (double)8);
+    initSldf(&g9sSldf, (double)9);
+    initSldf(&g10sSldf, (double)10);
+    initSldf(&g11sSldf, (double)11);
+    initSldf(&g12sSldf, (double)12);
+    initSldf(&g13sSldf, (double)13);
+    initSldf(&g14sSldf, (double)14);
+    initSldf(&g15sSldf, (double)15);
+    initSldf(&g16sSldf, (double)16);
+    checkgSldf();
+    ;
+    ;
+    ;
+    testSldf(g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf, g8sSldf, g9sSldf, g10sSldf, g11sSldf, g12sSldf, g13sSldf, g14sSldf, g15sSldf, g16sSldf);
+    ;
+    ;
+    ;
+    ;
+    testvaSldf(1, g1sSldf);
+    ;
+    testvaSldf(2, g1sSldf, g2sSldf);
+    ;
+    testvaSldf(3, g1sSldf, g2sSldf, g3sSldf);
+    ;
+    testvaSldf(4, g1sSldf, g2sSldf, g3sSldf, g4sSldf);
+    ;
+    testvaSldf(5, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf);
+    ;
+    testvaSldf(6, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf);
+    ;
+    testvaSldf(7, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf);
+    ;
+    testvaSldf(8, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf, g8sSldf);
+    ;
+    testvaSldf(9, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf, g8sSldf, g9sSldf);
+    ;
+    testvaSldf(10, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf, g8sSldf, g9sSldf, g10sSldf);
+    ;
+    testvaSldf(11, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf, g8sSldf, g9sSldf, g10sSldf, g11sSldf);
+    ;
+    testvaSldf(12, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf, g8sSldf, g9sSldf, g10sSldf, g11sSldf, g12sSldf);
+    ;
+    testvaSldf(13, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf, g8sSldf, g9sSldf, g10sSldf, g11sSldf, g12sSldf, g13sSldf);
+    ;
+    testvaSldf(14, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf, g8sSldf, g9sSldf, g10sSldf, g11sSldf, g12sSldf, g13sSldf, g14sSldf);
+    ;
+    testvaSldf(15, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf, g8sSldf, g9sSldf, g10sSldf, g11sSldf, g12sSldf, g13sSldf, g14sSldf, g15sSldf);
+    ;
+    testvaSldf(16, g1sSldf, g2sSldf, g3sSldf, g4sSldf, g5sSldf, g6sSldf, g7sSldf, g8sSldf, g9sSldf, g10sSldf, g11sSldf, g12sSldf, g13sSldf, g14sSldf, g15sSldf, g16sSldf);
+    ;
+    ;
+    ;
+    test2_Sldf(g1sSldf, g3sSldf, g5sSldf, g7sSldf, g9sSldf, g11sSldf, g13sSldf, g15sSldf);
+    ;
+}
+void struct_by_value_10_x()
+{
+    testitSfd();
+    testitSfl();
+    testitSdf();
+    testitSdl();
+    testitSlf();
+    testitSld();
+    testitSfdl();
+    testitSfld();
+    testitSdfl();
+    testitSdlf();
+    testitSlfd();
+    testitSldf();
+    if (fails != 0)
+        abort();
+}

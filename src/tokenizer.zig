@@ -1,5 +1,7 @@
 const std = @import("std");
 const Unit = @import("unit.zig").Unit;
+const IdentifierMap = @import("unit.zig").IdentifierMap;
+const IdentifierMapAdapter = @import("unit.zig").IdentifierMapAdapter;
 const DefineValue = @import("unit.zig").DefineValue;
 const Parser = @import("parser.zig").Parser;
 const diag = @import("diagnostics.zig");
@@ -113,6 +115,7 @@ pub const TokenKind = enum(u32) {
     @"volatile",
     @"while",
 
+    _complex,
     unsigned,
     signed,
     char,
@@ -228,6 +231,7 @@ pub const TokenKind = enum(u32) {
             .@"volatile" => "volatile",
             .@"while" => "while",
 
+            ._complex => "_Complex",
             .unsigned => "unsigned",
             .signed => "signed",
             .char => "char",
@@ -237,6 +241,9 @@ pub const TokenKind = enum(u32) {
             .float => "float",
             .double => "double",
             .bool => "bool",
+
+            .identifier => "identifier",
+            .type_name => "type name",
 
             else => std.debug.panic("Couldn't convert to string: {}", .{self}),
         };
@@ -275,6 +282,7 @@ pub const keyword_map = std.StaticStringMap(TokenKind).initComptime(&.{
     .{ "volatile", .@"volatile" },
     .{ "while", .@"while" },
 
+    .{ "_Complex", ._complex },
     .{ "unsigned", .unsigned },
     .{ "signed", .signed },
     .{ "char", .char },
@@ -356,7 +364,7 @@ pub const Argument = struct {
     }
 };
 
-pub const ArgumentMap = std.StringHashMap(Argument);
+pub const ArgumentMap = IdentifierMap(Argument);
 
 /// A tokenizer specific to a file.
 pub const FileTokenizer = struct {
@@ -409,7 +417,7 @@ pub const FileTokenizer = struct {
                 const tok = self.tokenizer.unit.token(item_index.start);
                 if (tok.kind == .identifier) {
                     const ident_str = self.tokenizer.unit.identifierAt(item_index.start);
-                    if (self.tokenizer.unit.type_names.contains(ident_str)) {
+                    if (self.tokenizer.unit.type_names.containsAdapted(ident_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                         const new_tok_index = TokenIndex{
                             .index = @truncate(self.tokenizer.unit.files.items[item_index.start.file_index].tokens.items.len),
                             .file_index = item_index.start.file_index,
@@ -433,7 +441,7 @@ pub const FileTokenizer = struct {
                 const name_tok = self.tokenizer.expansion_ctx_stack.items(.name_token)[self.tokenizer.expansion_ctx_stack.len - 1];
                 const tok_name_str = self.tokenizer.unit.identifierAt(name_tok);
                 self.tokenizer.expansion_ctx_stack.len -= 1;
-                _ = self.tokenizer.disabled_macros.remove(tok_name_str);
+                _ = self.tokenizer.disabled_macros.removeAdapted(tok_name_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit });
             }
 
             if ((item_index.flags & TokenRange.Flags.EXPANSION_DEPTH) > 0) {
@@ -547,7 +555,7 @@ pub const FileTokenizer = struct {
         if (self.currentVirtualEmpty()) {
             if (last_token) |last_tidx| {
                 if (self.checkIsIdentifier(last_tidx)) |ident_str| {
-                    if (self.tokenizer.disabled_macros.contains(ident_str)) {
+                    if (self.tokenizer.disabled_macros.containsAdapted(ident_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                         disabled = true;
                     }
                 }
@@ -568,7 +576,7 @@ pub const FileTokenizer = struct {
 
             if (last_token) |last_tidx| {
                 if (self.checkIsIdentifier(last_tidx)) |ident_str| blk: {
-                    if (disabled or self.tokenizer.disabled_macros.contains(ident_str)) {
+                    if (disabled or self.tokenizer.disabled_macros.containsAdapted(ident_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                         break :blk;
                     }
                     // const last_ex_tok = self.tokenizer.expansion_name_token_stack.getLastOrNull();
@@ -632,7 +640,7 @@ pub const FileTokenizer = struct {
                         //         break :blk;
                         //     }
                         // }
-                        if (self.tokenizer.disabled_macros.contains(ident_str)) {
+                        if (self.tokenizer.disabled_macros.containsAdapted(ident_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                             break :blk;
                         }
                         if (self.checkExpansion(ident_str, .{ .single = last_tidx })) {
@@ -728,27 +736,21 @@ pub const FileTokenizer = struct {
                     .index = @truncate(new_token_idx),
                     .file_index = self.file_index,
                 };
-
-                // var last_tok_slice: []const u8 = undefined;
-                // var next_tok_slice: []const u8 = undefined;
-                const last_tok_slice = self.tokenizer.unit.tokenSourceSlice(last_tidx);
-                const next_tok_slice = self.tokenizer.unit.tokenSourceSlice(next_tidx);
-
                 blk: {
                     if (last_tok.kind.isIntLiteral()) {
                         if (next_token.kind.isIntLiteral()) {
                             new_token.kind = next_token.kind;
                             break :blk;
-                        } else if (next_token.kind == .identifier) {
+                        } else if (next_token.kind == .identifier or next_token.kind == .type_name) {
                             new_token.kind = last_tok.kind;
                             break :blk;
                         }
-                    } else if (last_tok.kind == .identifier) {
+                    } else if (last_tok.kind == .identifier or next_token.kind == .type_name) {
                         if (next_token.kind.isIntLiteral()) {
-                            new_token.kind = last_tok.kind;
+                            new_token.kind = .identifier;
                             break :blk;
-                        } else if (next_token.kind == .identifier) {
-                            new_token.kind = last_tok.kind;
+                        } else if (next_token.kind == .identifier or next_token.kind == .type_name) {
+                            new_token.kind = .identifier;
                             break :blk;
                         }
                     }
@@ -781,17 +783,28 @@ pub const FileTokenizer = struct {
 
                 if (copy_source_index) |csi| {
                     new_token.start = csi;
-                    const src_len = self.source.len;
-                    self.source = self.tokenizer.allocator.realloc(self.source, self.source.len + next_tok_slice.len) catch @panic("OOM");
+                    const write_index = self.source.len - 1;
+                    const next_tok_slice_len = self.tokenizer.unit.tokenLength(next_tidx);
+
+                    // don't realloc +1 here since we did this in the parent call and we write to that byte instead
+                    self.source = self.tokenizer.allocator.realloc(self.source, self.source.len + next_tok_slice_len) catch @panic("OOM");
                     self.tokenizer.unit.files.items[self.file_index].source = self.source;
 
-                    @memcpy(self.source[src_len .. src_len + next_tok_slice.len], next_tok_slice);
+                    const next_tok_slice = self.tokenizer.unit.tokenSourceSlice(next_tidx);
+                    @memcpy(self.source[write_index .. write_index + next_tok_slice.len], next_tok_slice);
                 } else {
                     new_token.start = @truncate(self.source.len);
-                    self.source = self.tokenizer.allocator.realloc(self.source, self.source.len + last_tok_slice.len + next_tok_slice.len) catch @panic("OOM");
+                    const last_tok_slice_len = self.tokenizer.unit.tokenLength(last_tidx);
+                    const next_tok_slice_len = self.tokenizer.unit.tokenLength(next_tidx);
+                    // realloc +1 for 'null terminator'
+                    self.source = self.tokenizer.allocator.realloc(self.source, self.source.len + last_tok_slice_len + next_tok_slice_len + 1) catch @panic("OOM");
                     self.tokenizer.unit.files.items[self.file_index].source = self.source;
+                    const last_tok_slice = self.tokenizer.unit.tokenSourceSlice(last_tidx);
+                    const next_tok_slice = self.tokenizer.unit.tokenSourceSlice(next_tidx);
                     @memcpy(self.source[new_token.start .. new_token.start + last_tok_slice.len], last_tok_slice);
                     @memcpy(self.source[new_token.start + last_tok_slice.len .. new_token.start + last_tok_slice.len + next_tok_slice.len], next_tok_slice);
+                    // null terminator is just space
+                    self.source[self.source.len - 1] = ' ';
                 }
 
                 self.tokenizer.unit.files.items[self.file_index].tokens.append(new_token) catch @panic("OOM");
@@ -805,7 +818,7 @@ pub const FileTokenizer = struct {
                     //         break :blk;
                     //     }
                     // }
-                    if (self.tokenizer.disabled_macros.contains(ident_str)) {
+                    if (self.tokenizer.disabled_macros.containsAdapted(ident_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                         break :blk;
                     }
                     if (self.checkExpansion(ident_str, .{ .single = new_idx })) {
@@ -836,7 +849,7 @@ pub const FileTokenizer = struct {
                         //         break :blk;
                         //     }
                         // }
-                        if (self.tokenizer.disabled_macros.contains(ident_str)) {
+                        if (self.tokenizer.disabled_macros.containsAdapted(ident_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                             break :blk;
                         }
                         if (self.checkExpansion(ident_str, .{ .single = last_tidx })) {
@@ -1013,7 +1026,8 @@ pub const FileTokenizer = struct {
         }
         while (index > 0) {
             index -= 1;
-            if (self.tokenizer.expansion_stack.items[index].map.get(arg)) |value| {
+            const argument = self.tokenizer.expansion_stack.items[index].map.getAdapted(arg, IdentifierMapAdapter{ .unit = self.tokenizer.unit });
+            if (argument) |value| {
                 return value;
             }
         }
@@ -1071,7 +1085,7 @@ pub const FileTokenizer = struct {
     ///     - define function
     /// and pushes virtual tokens onto the stack, then returns true if was one of the above.
     fn checkExpansion(self: *Self, str: []const u8, callsite: diag.DiagnosticLocation) bool {
-        if (self.tokenizer.unit.defines.get(str)) |def| {
+        if (self.tokenizer.unit.defines.getAdapted(str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) |def| {
             if (def.range.start.index < def.range.end.index) {
                 self.tokenizer.pushVirtual(.{
                     .start = def.range.start,
@@ -1083,12 +1097,12 @@ pub const FileTokenizer = struct {
                     .name_token = def.name_tok,
                     .callsite = callsite,
                 }) catch @panic("OOM");
-                self.tokenizer.disabled_macros.put(str, {}) catch @panic("OOM");
+                self.tokenizer.disabled_macros.put(def.name_tok, {}) catch @panic("OOM");
             }
             return true;
         }
 
-        if (self.tokenizer.unit.define_fns.get(str)) |def| blk: {
+        if (self.tokenizer.unit.define_fns.getAdapted(str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) |def| blk: {
             _ = blk1: {
                 const pidx = self.tokenizer.peek(false);
                 if (pidx == null or self.tokenizer.unit.token(pidx.?).kind != .open_paren) {
@@ -1097,7 +1111,7 @@ pub const FileTokenizer = struct {
                 break :blk1 self.tokenizer.next(false).?;
             };
 
-            var argument_map = ArgumentMap.init(self.tokenizer.allocator);
+            var argument_map = ArgumentMap.initContext(self.tokenizer.allocator, .{ .unit = self.tokenizer.unit });
             var va_arg: ?Argument = null;
             var parameter_iter = def.parameters.iterator();
 
@@ -1328,7 +1342,7 @@ pub const FileTokenizer = struct {
                     .name_token = def.name_tok,
                     .callsite = callsite,
                 }) catch @panic("OOM");
-                self.tokenizer.disabled_macros.put(str, {}) catch @panic("OOM");
+                self.tokenizer.disabled_macros.put(def.name_tok, {}) catch @panic("OOM");
             }
 
             return true;
@@ -1713,7 +1727,7 @@ pub const FileTokenizer = struct {
                             else => break,
                         }
                     }
-                    const str = self.source[start..self.pos];
+                    const str: []const u8 = self.source[start..self.pos];
 
                     if (!self.tokenizer.in_define) {
                         if (self.checkExpansion(str, .{
@@ -1723,7 +1737,7 @@ pub const FileTokenizer = struct {
                         }
                     }
 
-                    if (self.tokenizer.unit.type_names.contains(str)) {
+                    if (self.tokenizer.unit.type_names.containsAdapted(str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                         break :blk TokenKind.type_name;
                     }
 
@@ -1778,20 +1792,20 @@ pub const FileTokenizer = struct {
                             while (self.tokenizer.next(true)) |_| {}
                             return null;
                         }
+
                         std.debug.assert(define_name.kind == .identifier);
-                        const define_str = self.tokenizer.unit.identifierAt(first_token.?);
                         var var_arg = false;
 
                         if (second_token != null and self.tokenizer.unit.token(second_token.?).kind == .open_paren) {
                             // Function type macro
-                            var parameter_map = std.StringArrayHashMap(void).init(self.tokenizer.allocator);
+                            var parameter_map = std.AutoArrayHashMap(TokenIndex, void).init(self.tokenizer.allocator);
                             var next_must_be_arg = false;
 
                             while (self.tokenizer.next(true)) |pidx| {
                                 const p = self.tokenizer.unit.token(pidx);
                                 switch (p.kind) {
                                     .identifier => {
-                                        parameter_map.put(self.tokenizer.unit.identifierAt(pidx), {}) catch @panic("OOM");
+                                        parameter_map.put(pidx, {}) catch @panic("OOM");
                                         next_must_be_arg = false;
                                     },
                                     .ellipsis => {
@@ -1847,7 +1861,7 @@ pub const FileTokenizer = struct {
                                 count += 1;
                             }
 
-                            const define = self.tokenizer.unit.define_fns.getOrPut(define_str) catch @panic("OOM");
+                            const define = self.tokenizer.unit.define_fns.getOrPut(first_token.?) catch @panic("OOM");
 
                             define.value_ptr.* = .{
                                 .name_tok = first_token.?,
@@ -1869,7 +1883,7 @@ pub const FileTokenizer = struct {
                                 count += 1;
                             }
 
-                            const define = self.tokenizer.unit.defines.getOrPut(define_str) catch @panic("OOM");
+                            const define = self.tokenizer.unit.defines.getOrPut(first_token.?) catch @panic("OOM");
 
                             define.value_ptr.* = .{
                                 .name_tok = first_token.?,
@@ -2006,7 +2020,7 @@ pub const FileTokenizer = struct {
                         if (def_token.kind == .identifier) {
                             const def_token_str = self.tokenizer.unit.identifierAt(def_token_index);
 
-                            if (!self.tokenizer.unit.defines.contains(def_token_str) and !self.tokenizer.unit.define_fns.contains(def_token_str)) {
+                            if (!self.tokenizer.unit.defines.containsAdapted(def_token_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit }) and !self.tokenizer.unit.define_fns.containsAdapted(def_token_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                                 self.tokenizer.conditional_skip = true;
                                 self.tokenizer.if_stack.push(0) catch @panic("OOM");
                             } else {
@@ -2053,7 +2067,7 @@ pub const FileTokenizer = struct {
                         if (def_token.kind == .identifier) {
                             const def_token_str = self.tokenizer.unit.identifierAt(def_token_index);
 
-                            if (self.tokenizer.unit.defines.contains(def_token_str) or self.tokenizer.unit.define_fns.contains(def_token_str)) {
+                            if (self.tokenizer.unit.defines.containsAdapted(def_token_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit }) or self.tokenizer.unit.define_fns.containsAdapted(def_token_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                                 self.tokenizer.conditional_skip = true;
                                 self.tokenizer.if_stack.push(0) catch @panic("OOM");
                             } else {
@@ -2186,8 +2200,8 @@ pub const FileTokenizer = struct {
                         if (def_token.kind == .identifier) {
                             const def_token_str = self.tokenizer.unit.identifierAt(def_token_index);
 
-                            if (!self.tokenizer.unit.defines.remove(def_token_str)) {
-                                _ = self.tokenizer.unit.define_fns.remove(def_token_str);
+                            if (!self.tokenizer.unit.defines.removeAdapted(def_token_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
+                                _ = self.tokenizer.unit.define_fns.removeAdapted(def_token_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit });
                             }
                         } else {
                             while (self.tokenizer.next(true)) |_| {}
@@ -2387,7 +2401,7 @@ pub const Tokenizer = struct {
     peeked_token: ?TokenIndex = null,
     in_define: bool = false,
     expansion_depth: u32 = 0,
-    disabled_macros: std.StringHashMap(void),
+    disabled_macros: IdentifierMap(void),
 
     conditional_skip: bool = false,
 
@@ -2401,7 +2415,7 @@ pub const Tokenizer = struct {
             .virtual_stack = std.ArrayList(TokenRange).init(allocator),
             .expansion_stack = std.ArrayList(ExpansionArgumentMap).init(allocator),
             .expansion_ctx_stack = .{},
-            .disabled_macros = .init(allocator),
+            .disabled_macros = .initContext(allocator, .{ .unit = unit }),
             .if_stack = std.BitStack.init(allocator),
         };
     }
@@ -2504,6 +2518,15 @@ pub const Tokenizer = struct {
         return null;
     }
 
+    pub fn diagnosticLocation(self: *const Self) diag.DiagnosticLocation {
+        return .{
+            .file_position = .{
+                .position = self.file_stack.first.?.data.pos,
+                .file_index = self.file_stack.first.?.data.file_index,
+            },
+        };
+    }
+
     pub fn printIncludeStack(self: *const Self) void {
         var current = self.file_stack.first;
         while (current != null) : (current = current.?.next) {
@@ -2588,7 +2611,7 @@ const SimpleExpressionEvaluator = struct {
                                     self.next();
                                     const ident_str = self.unit.identifierAt(op.?.index);
 
-                                    if (self.unit.defines.contains(ident_str) or self.unit.define_fns.contains(ident_str)) {
+                                    if (self.unit.defines.containsAdapted(ident_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit }) or self.unit.define_fns.containsAdapted(ident_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                                         left = .{ .int_value = 1 };
                                     } else {
                                         left = .{ .int_value = 0 };
@@ -2609,7 +2632,7 @@ const SimpleExpressionEvaluator = struct {
                             }
                             self.next();
                             const ident_str = self.unit.identifierAt(op.?.index);
-                            if (self.unit.defines.contains(ident_str) or self.unit.define_fns.contains(ident_str)) {
+                            if (self.unit.defines.containsAdapted(ident_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit }) or self.unit.define_fns.containsAdapted(ident_str, IdentifierMapAdapter{ .unit = self.tokenizer.unit })) {
                                 left = .{ .int_value = 1 };
                             } else {
                                 left = .{ .int_value = 0 };

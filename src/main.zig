@@ -126,7 +126,7 @@ pub fn main() !void {
     }
 
     var unit = Unit.init(gpa.allocator(), .{ .debug_trace = debug_trace });
-    var interner = TypeInterner.init(&unit);
+    var interner = TypeInterner.init(unit);
     interner.setup();
     unit.interner = &interner;
 
@@ -581,14 +581,14 @@ pub fn main() !void {
         .{ "__unsafe_unretained", "" },
         .{ "__weak", "__attribute__((objc_gc(weak)))" },
     };
-    try unit.type_names.put("__uint128_t", {});
-    try unit.type_names.put("__int128_t", {});
-    try unit.type_names.put("__builtin_va_list", {});
     var cfg_source_buffer = std.ArrayList(u8).init(gpa.allocator());
     var cfg_source_writer = cfg_source_buffer.writer();
     for (config_defines) |cfg| {
         try cfg_source_writer.print("#define {s} {s}\n", .{ cfg[0], cfg[1] });
     }
+    try cfg_source_writer.print("typedef int __uint128_t;\n", .{});
+    try cfg_source_writer.print("typedef int __int128_t;\n", .{});
+    try cfg_source_writer.print("typedef int __builtin_va_list;\n", .{});
     const cfg_file_index = unit.addFile(absolute_path, cfg_source_buffer.items);
 
     const root_file = unit.addFile(absolute_path, source);
@@ -602,7 +602,7 @@ pub fn main() !void {
             try unit.include_dirs.append(try std.fs.realpathAlloc(gpa.allocator(), path));
         }
     }
-    var tokenizer = Tokenizer.init(gpa.allocator(), &unit);
+    var tokenizer = Tokenizer.init(gpa.allocator(), unit);
     _ = tokenizer.initFile(root_file);
     _ = tokenizer.initFile(cfg_file_index);
 
@@ -631,12 +631,12 @@ pub fn main() !void {
             .colors = true,
         };
         for (unit.diagnostics.items) |d| {
-            try d.write(std.io.getStdOut().writer(), &unit, format_config);
+            try d.write(std.io.getStdOut().writer(), unit, format_config);
         }
         return;
     }
 
-    var parser = Parser.init(&unit, &tokenizer);
+    var parser = Parser.init(unit, &tokenizer);
     const unit_range = try parser.parseUnit();
 
     const stdout = std.io.getStdOut();
@@ -647,12 +647,12 @@ pub fn main() !void {
         // try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, false, writer);
     }
 
-    var typechecker = TypeChecker.init(&unit);
+    var typechecker = TypeChecker.init(unit);
     for (0..unit_range.count) |i| {
         const node_index = unit.node_ranges.items[i + unit_range.start];
         _ = try typechecker.checkNode(node_index, null);
         if (debug_trace) {
-            try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, true, &writer);
+            try Node.writeTree(node_index, unit, 0, i == unit_range.count - 1, true, &writer);
         }
     }
 
@@ -660,10 +660,10 @@ pub fn main() !void {
         .colors = true,
     };
     for (unit.diagnostics.items) |d| {
-        try d.write(std.io.getStdOut().writer(), &unit, format_config);
+        try d.write(std.io.getStdOut().writer(), unit, format_config);
     }
 
-    var codegen = try cg.CodeGenerator.init(&unit);
+    var codegen = try cg.CodeGenerator.init(unit);
     for (0..unit_range.count) |i| {
         const node_index = unit.node_ranges.items[i + unit_range.start];
         // try Node.writeTree(node_index, &unit, 0, i == unit_range.count - 1, writer);

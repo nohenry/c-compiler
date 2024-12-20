@@ -5,7 +5,7 @@
             "request": "launch",
             "name": "Launch",
             "program": "${workspaceFolder}/zig-out/bin/cp",
-            "args": ["test/main.cp", "-E"],
+            "args": ["test/main.cp"],
             "cwd": "${workspaceFolder}"
         },
         {

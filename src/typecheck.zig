@@ -1,5 +1,6 @@
 const std = @import("std");
 const Unit = @import("unit.zig").Unit;
+const IdentifierMapAdapter = @import("unit.zig").IdentifierMapAdapter;
 const NodeIndex = @import("parser.zig").NodeIndex;
 const Node = @import("parser.zig").Node;
 const Type = @import("types.zig").Type;
@@ -1145,14 +1146,12 @@ pub const TypeChecker = struct {
                     const member = &self.unit.nodes.items[member_index];
                     switch (member.kind) {
                         .enum_member => {
-                            const ident_str = self.unit.identifierAt(@bitCast(member.data.two.a));
-                            self.unit.enum_constants.put(ident_str, index_value) catch @panic("OOM");
+                            self.unit.enum_constants.put(@bitCast(member.data.two.a), index_value) catch @panic("OOM");
                         },
                         .enum_member_value => {
-                            const ident_str = self.unit.identifierAt(@bitCast(member.data.two.a));
                             var eval = SimpleEvaluator.init(self.unit);
                             const this_index_value = try eval.evalNode(member.data.two.b);
-                            self.unit.enum_constants.put(ident_str, this_index_value.int_value) catch @panic("OOM");
+                            self.unit.enum_constants.put(@bitCast(member.data.two.a), this_index_value.int_value) catch @panic("OOM");
                             index_value = this_index_value.int_value;
                         },
                         else => @panic("compiler bug"),
@@ -1178,14 +1177,12 @@ pub const TypeChecker = struct {
                     const member = &self.unit.nodes.items[member_index];
                     switch (member.kind) {
                         .enum_member => {
-                            const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
-                            self.unit.enum_constants.put(ident_str, index_value) catch @panic("OOM");
+                            self.unit.enum_constants.put(@bitCast(node.data.two.a), index_value) catch @panic("OOM");
                         },
                         .enum_member_value => {
-                            const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
                             var eval = SimpleEvaluator.init(self.unit);
                             const this_index_value = try eval.evalNode(node.data.two.b);
-                            self.unit.enum_constants.put(ident_str, this_index_value.int_value) catch @panic("OOM");
+                            self.unit.enum_constants.put(@bitCast(node.data.two.a), this_index_value.int_value) catch @panic("OOM");
                             index_value = this_index_value.int_value;
                         },
                         else => @panic("compiler bug"),
@@ -1434,7 +1431,7 @@ pub const SimpleEvaluator = struct {
             .unsigned_size_literal => return .{ .int_value = node.data.long },
             .identifier => {
                 const ident_str = self.unit.identifierAt(@bitCast(node.data.two.a));
-                if (self.unit.enum_constants.get(ident_str)) |cv| {
+                if (self.unit.enum_constants.getAdapted(ident_str, IdentifierMapAdapter{ .unit = self.unit })) |cv| {
                     return .{ .int_value = cv };
                 }
 
