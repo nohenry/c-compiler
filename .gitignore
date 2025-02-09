@@ -5,3 +5,8 @@ a.out
 testsuite
 *.exe
 *.o
+.DS_Store
+a.out
+out.cp
+.vscode
+main
